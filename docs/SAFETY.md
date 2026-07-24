@@ -121,6 +121,10 @@ rows after planning. Apply instead captures the current rows in a verified
 backup after Codex is closed, then refuses if the database or WAL changes
 during or after that backup.
 
+If planning observed a Codex version, apply must observe that same version.
+An unavailable apply-time version is a refusal rather than evidence that the
+version is unchanged.
+
 Writable connections use SQLite URI `mode=rw` after strict path resolution.
 They cannot create a missing target.
 
@@ -143,9 +147,11 @@ Failure before commit leaves the target without a partial doctor trigger. A
 failure after backup may leave a private verified backup for manual retention;
 the tool never deletes it automatically.
 
-A byte-identical requested trigger already present is a no-op success only
-when no additional trigger conflicts. Altered doctor SQL, additional
-doctor-prefixed triggers, and switching modes require rollback and a new plan.
+A canonical SQL-equivalent requested trigger already present is a no-op
+success only when no additional trigger conflicts. Altered doctor SQL,
+additional doctor-prefixed triggers on any table, and switching modes require
+rollback and a new plan. Reports count unexpected doctor-prefixed triggers
+without printing their potentially private names or SQL.
 
 Mutation is refused when:
 
@@ -193,6 +199,10 @@ Rollback:
 2. revalidates target identity and exact installed trigger;
 3. creates and verifies a fresh backup of the current state;
 4. drops only the trigger named and fingerprinted in the manifest.
+
+If the exact trigger is already absent and no conflicting doctor trigger
+exists, rollback performs no database mutation but still seals the manifest as
+`rolled_back` so the durable lifecycle record matches the observed state.
 
 It never restores the older database automatically. An automatic restore could
 overwrite newer diagnostic data or collide with a live WAL. Manual disaster

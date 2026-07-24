@@ -193,6 +193,35 @@ class SQLiteInspectionTests(unittest.TestCase):
             )
             self.assertNotIn("private_trigger_name", json.dumps(result.to_dict()))
 
+    def test_unexpected_doctor_trigger_is_counted_without_name_or_sql(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            database = Path(temporary) / "logs_2.sqlite"
+            build_database(database)
+            private_name = (
+                "codex_storage_doctor_v1_SYNTHETIC_PRIVATE_TRIGGER_NAME"
+            )
+            connection = sqlite3.connect(database)
+            try:
+                connection.execute(
+                    f"""
+                    CREATE TRIGGER {private_name}
+                    AFTER INSERT ON logs
+                    BEGIN SELECT 1; END
+                    """
+                )
+                connection.commit()
+            finally:
+                connection.close()
+            result = inspect_database(database)
+            rendered = json.dumps(result.to_dict())
+            self.assertEqual(result.unexpected_doctor_trigger_count, 1)
+            self.assertEqual(result.status, "error")
+            self.assertIn(
+                "unexpected_doctor_trigger",
+                [finding.code for finding in result.findings],
+            )
+            self.assertNotIn(private_name, rendered)
+
     def test_full_scan_threshold_and_explicit_override(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             database = Path(temporary) / "logs_2.sqlite"

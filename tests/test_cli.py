@@ -18,6 +18,34 @@ from codex_storage_doctor.sampling import sample_database
 
 
 class CLITests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.planning_version_patch = patch(
+            "codex_storage_doctor.planning.observed_codex_version",
+            return_value=None,
+        )
+        self.mitigation_version_patch = patch(
+            "codex_storage_doctor.mitigation.observed_codex_version",
+            return_value=None,
+        )
+        self.cli_version_patch = patch.object(
+            cli,
+            "observed_codex_version",
+            return_value=None,
+        )
+        self.process_patch = patch.object(
+            cli,
+            "scan_codex_processes",
+            return_value=ProcessScan(status="ok"),
+        )
+        for patcher in (
+            self.planning_version_patch,
+            self.mitigation_version_patch,
+            self.cli_version_patch,
+            self.process_patch,
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     def _seed_private_row(self, database: Path) -> None:
         connection = sqlite3.connect(database)
         connection.execute(
@@ -124,9 +152,12 @@ class CLITests(unittest.TestCase):
             root = Path(directory)
             database = create_database(root)
             plan_path = root / "plan.json"
-            with patch(
-                "codex_storage_doctor.planning.observed_codex_version",
-                return_value=None,
+            with (
+                patch(
+                    "codex_storage_doctor.planning.observed_codex_version",
+                    return_value=None,
+                ),
+                patch("sys.stdout", io.StringIO()),
             ):
                 code = cli.main(
                     [
@@ -143,9 +174,12 @@ class CLITests(unittest.TestCase):
             self.assertEqual(database.name, "logs_2.sqlite")
             plan = read_json_object(plan_path)
 
-            with patch(
-                "codex_storage_doctor.processes.scan_codex_processes",
-                side_effect=clear_process_scan,
+            with (
+                patch(
+                    "codex_storage_doctor.processes.scan_codex_processes",
+                    side_effect=clear_process_scan,
+                ),
+                patch("sys.stdout", io.StringIO()),
             ):
                 code = cli.main(
                     [
@@ -165,9 +199,12 @@ class CLITests(unittest.TestCase):
             self.assertEqual(len(manifests), 1)
             manifest = read_json_object(manifests[0])
 
-            with patch(
-                "codex_storage_doctor.processes.scan_codex_processes",
-                side_effect=clear_process_scan,
+            with (
+                patch(
+                    "codex_storage_doctor.processes.scan_codex_processes",
+                    side_effect=clear_process_scan,
+                ),
+                patch("sys.stdout", io.StringIO()),
             ):
                 code = cli.main(
                     [
@@ -187,9 +224,12 @@ class CLITests(unittest.TestCase):
             root = Path(directory)
             database = create_database(root)
             plan_path = root / "plan.json"
-            with patch(
-                "codex_storage_doctor.planning.observed_codex_version",
-                return_value=None,
+            with (
+                patch(
+                    "codex_storage_doctor.planning.observed_codex_version",
+                    return_value=None,
+                ),
+                patch("sys.stdout", io.StringIO()),
             ):
                 self.assertEqual(
                     cli.main(
@@ -216,6 +256,45 @@ class CLITests(unittest.TestCase):
             cli.main(["audit", "--sample-seconds", "-1"])
         self.assertEqual(caught.exception.code, cli.EXIT_USAGE)
         self.assertIn("between 0 and 86400", stderr.getvalue())
+
+    def test_malformed_json_artifacts_use_artifact_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = create_database(root)
+            malformed = root / "malformed.json"
+            malformed.write_text("{not-json", encoding="utf-8")
+            commands = (
+                [
+                    "apply",
+                    "--plan",
+                    str(malformed),
+                    "--confirm",
+                    "synthetic",
+                ],
+                [
+                    "verify",
+                    "--database",
+                    str(database),
+                    "--manifest",
+                    str(malformed),
+                    "--sample-seconds",
+                    "0",
+                ],
+                [
+                    "rollback",
+                    "--manifest",
+                    str(malformed),
+                    "--confirm",
+                    "synthetic",
+                ],
+            )
+            for command in commands:
+                with self.subTest(command=command[0]):
+                    stderr = io.StringIO()
+                    with patch("sys.stderr", stderr):
+                        code = cli.main(command)
+                    self.assertEqual(code, cli.EXIT_ARTIFACT)
+                    self.assertIn("Artifact operation failed", stderr.getvalue())
 
     def test_audit_passes_full_scan_to_bounded_sampling(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -327,6 +406,44 @@ class CLITests(unittest.TestCase):
             self.assertTrue(report["manifest_context"]["matches"])
             self.assertTrue(
                 report["manifest_context"]["exact_trigger_state_matches"]
+            )
+
+            connection = sqlite3.connect(database)
+            connection.execute(
+                """
+                CREATE TRIGGER codex_storage_doctor_v1_extra
+                AFTER INSERT ON logs
+                BEGIN SELECT 1; END
+                """
+            )
+            connection.commit()
+            connection.close()
+            extra_stdout = io.StringIO()
+            with (
+                patch.object(cli, "sample_database", side_effect=sampled),
+                patch.object(cli, "observed_codex_version", return_value=None),
+                patch("sys.stdout", extra_stdout),
+            ):
+                extra_code = cli.main(
+                    [
+                        "verify",
+                        "--database",
+                        str(database),
+                        "--manifest",
+                        str(manifest_path),
+                        "--sample-seconds",
+                        "0",
+                        "--json",
+                    ]
+                )
+            self.assertEqual(extra_code, cli.EXIT_PARTIAL)
+            extra_report = json.loads(extra_stdout.getvalue())
+            self.assertFalse(extra_report["manifest_context"]["matches"])
+            self.assertEqual(
+                extra_report["inspection"][
+                    "unexpected_doctor_trigger_count"
+                ],
+                1,
             )
 
             other_root = root / "other"

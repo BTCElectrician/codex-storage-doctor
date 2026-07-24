@@ -47,3 +47,22 @@ This record does not turn the initial rejection into acceptance. A second
 fresh-context Sol review must inspect the corrected source, tests, generated
 artifacts, safety invariants, and residual-risk labels. Its verdict will be
 appended here before handoff.
+
+## Second-review findings corrected before final verdict
+
+The fresh post-fix reviewer identified additional issues while inspecting the
+correction set. They were accepted and corrected before asking for a verdict:
+
+| Priority | Finding | Disposition |
+| --- | --- | --- |
+| P1 | Incremental wheel build state could package stale ignored `build/lib` source. | **Accepted.** Wheel construction now stages only current project metadata and `src/` in a fresh temporary tree. Both wheel and zipapp inventories and module bytes are compared with current source. |
+| P1 | An unknown doctor-prefixed trigger on another table was outside exact verification and rollback conflict checks. | **Accepted.** Inspection counts every doctor-prefixed trigger without exposing arbitrary names or SQL; plan, apply, verify, and rollback fail closed on unexpected entries. |
+| P1 | An already-absent trigger could return rollback success without advancing the manifest lifecycle. | **Accepted.** This idempotent branch now seals and writes `rolled_back` state and explicitly reports manifest reconciliation. |
+| P1 | A plan with a known Codex version could proceed when the apply-time version became unavailable. | **Accepted.** Known-at-plan and unavailable-at-apply is now a safety refusal before backup or mutation. |
+| P1 | Tests could inherit operator homes and process/version discovery. | **Accepted.** The suite runs under isolated home/Codex roots and system-only executable lookup; command tests inject process and version evidence. |
+| P2 | Hosted CI omitted the newest supported stable Python line. | **Accepted.** The matrix now covers Python 3.11 and 3.14 on Ubuntu, macOS, and Windows. |
+| P2 | Malformed plan/manifest JSON returned the no-database exit code. | **Accepted.** Artifact decoding now has a dedicated failure type and stable exit 7 across apply, verify, and rollback. |
+
+The corrected tree passes 58 isolated tests and rebuilds source-matching wheel
+and zipapp artifacts. These corrections still do not claim acceptance; the
+reviewer's final disposition is pending.

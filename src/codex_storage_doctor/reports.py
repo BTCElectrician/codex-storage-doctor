@@ -9,6 +9,10 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
+class ArtifactReadError(Exception):
+    """A requested JSON artifact could not be decoded as an object."""
+
+
 def render_json(value: Mapping[str, Any]) -> str:
     return json.dumps(value, indent=2, sort_keys=True, ensure_ascii=True) + "\n"
 
@@ -78,8 +82,11 @@ def write_private_json(
 
 
 def read_json_object(path: Path) -> dict[str, Any]:
-    with path.expanduser().open("r", encoding="utf-8") as handle:
-        value = json.load(handle)
+    try:
+        with path.expanduser().open("r", encoding="utf-8") as handle:
+            value = json.load(handle)
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ArtifactReadError(f"cannot read JSON artifact: {error}") from error
     if not isinstance(value, dict):
-        raise ValueError("expected a JSON object")
+        raise ArtifactReadError("expected a JSON object artifact")
     return value

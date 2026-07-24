@@ -34,7 +34,12 @@ from .planning import (
 )
 from .privacy import assert_privacy_safe
 from .processes import scan_codex_processes
-from .reports import read_json_object, render_json, write_private_json
+from .reports import (
+    ArtifactReadError,
+    read_json_object,
+    render_json,
+    write_private_json,
+)
 from .sampling import sample_database
 from .sqlite_inspect import inspect_database
 
@@ -236,6 +241,10 @@ def _audit_text(result: Mapping[str, Any]) -> str:
         if inspection["altered_doctor_triggers"]:
             lines.append(
                 "  error: a doctor-named trigger failed exact SQL verification"
+            )
+        if inspection["unexpected_doctor_trigger_count"]:
+            lines.append(
+                "  error: an unexpected doctor-prefixed trigger exists"
             )
         sample = database.get("sample")
         if sample is not None:
@@ -504,6 +513,10 @@ def _verify_text(result: Mapping[str, Any]) -> str:
         lines.append(
             "Error: a doctor-named trigger exists but failed exact SQL verification."
         )
+    if inspection["unexpected_doctor_trigger_count"]:
+        lines.append(
+            "Error: an unexpected doctor-prefixed trigger exists."
+        )
     if (
         inspection["doctor_triggers"]
         and sample["target_open_by_codex"]
@@ -576,12 +589,21 @@ def _run_verify(args: argparse.Namespace) -> int:
             and trigger_name not in inspection.altered_doctor_triggers
         )
         altered_present = trigger_name in inspection.altered_doctor_triggers
+        unexpected_present = bool(
+            inspection.unexpected_doctor_trigger_count
+        )
         if status == "applied":
             expected_state = "present"
-            trigger_state_matches = exact_present and not altered_present
+            trigger_state_matches = (
+                exact_present and not altered_present and not unexpected_present
+            )
         elif status == "rolled_back":
             expected_state = "absent"
-            trigger_state_matches = not exact_present and not altered_present
+            trigger_state_matches = (
+                not exact_present
+                and not altered_present
+                and not unexpected_present
+            )
         else:
             expected_state = "indeterminate_prepared"
             trigger_state_matches = False
@@ -729,6 +751,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     except sqlite3.Error as error:
         print(f"SQLite operation failed: {error}", file=sys.stderr)
         return EXIT_SQLITE
+    except ArtifactReadError as error:
+        print(f"Artifact operation failed: {error}", file=sys.stderr)
+        return EXIT_ARTIFACT
     except (FileNotFoundError, ValueError) as error:
         print(f"Input error: {error}", file=sys.stderr)
         return EXIT_NOT_FOUND

@@ -23,8 +23,9 @@ Never:
   make a test pass.
 
 Tests override `HOME`, `USERPROFILE`, `CODEX_HOME`, and `CODEX_SQLITE_HOME`,
-and inject fake process adapters. Payload canaries must be obviously synthetic
-and must never appear in CLI output or report artifacts.
+clear ambient executable lookup, and inject fake process/version adapters.
+Payload canaries must be obviously synthetic and must never appear in CLI
+output or report artifacts.
 
 ## Local checks
 
@@ -39,6 +40,7 @@ Build and smoke the two dependency-free distribution paths with:
 ```bash
 make build
 make zipapp
+python scripts/verify_artifacts.py
 python dist/codex-storage-doctor.pyz --version
 ```
 

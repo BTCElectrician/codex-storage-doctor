@@ -15,12 +15,16 @@ from .models import (
     LevelAggregate,
     SchemaColumn,
 )
-from .planning import TRIGGER_NAMES, TRIGGER_SQL, normalize_sql
+from .planning import (
+    DOCTOR_TRIGGER_PREFIX,
+    TRIGGER_NAMES,
+    TRIGGER_SQL,
+    normalize_sql,
+)
 from .schema import BODY_COLUMNS, REQUIRED_LOG_COLUMNS
 
 
 FULL_SCAN_THRESHOLD_BYTES = 256 * 1024 * 1024
-DOCTOR_TRIGGER_NAMES: tuple[str, ...] = tuple(sorted(TRIGGER_NAMES.values()))
 
 
 def _size(path: Path) -> int:
@@ -73,27 +77,32 @@ def _quick_check(connection: sqlite3.Connection) -> bool:
 
 def _doctor_triggers(
     connection: sqlite3.Connection,
-) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    placeholders = ", ".join("?" for _ in DOCTOR_TRIGGER_NAMES)
+) -> tuple[tuple[str, ...], tuple[str, ...], int]:
     rows = connection.execute(
-        (
-            "SELECT name, COALESCE(sql, '') FROM sqlite_master "
-            f"WHERE type = 'trigger' AND name IN ({placeholders}) ORDER BY name"
-        ),
-        DOCTOR_TRIGGER_NAMES,
+        """
+        SELECT name, COALESCE(sql, '')
+        FROM sqlite_master
+        WHERE type = 'trigger' AND name GLOB ?
+        ORDER BY name
+        """,
+        (f"{DOCTOR_TRIGGER_PREFIX}*",),
     ).fetchall()
     expected_by_name = {
         TRIGGER_NAMES[mode]: normalize_sql(sql) for mode, sql in TRIGGER_SQL.items()
     }
     exact: list[str] = []
     altered: list[str] = []
+    unexpected = 0
     for raw_name, raw_sql in rows:
         name = str(raw_name)
+        if name not in expected_by_name:
+            unexpected += 1
+            continue
         if normalize_sql(str(raw_sql)) == expected_by_name[name]:
             exact.append(name)
         else:
             altered.append(name)
-    return tuple(exact), tuple(altered)
+    return tuple(exact), tuple(altered), unexpected
 
 
 def _sequence(connection: sqlite3.Connection) -> int | None:
@@ -251,7 +260,9 @@ def inspect_database(
             REQUIRED_LOG_COLUMNS.issubset(column_names)
             and bool(BODY_COLUMNS.intersection(column_names))
         )
-        triggers, altered_triggers = _doctor_triggers(connection)
+        triggers, altered_triggers, unexpected_trigger_count = _doctor_triggers(
+            connection
+        )
         sequence = _sequence(connection) if "id" in column_names else None
         findings: list[Finding] = []
 
@@ -282,6 +293,17 @@ def inspect_database(
                     severity=FindingSeverity.ERROR,
                 )
             )
+        if unexpected_trigger_count:
+            findings.append(
+                Finding(
+                    code="unexpected_doctor_trigger",
+                    message=(
+                        "An unexpected doctor-prefixed trigger exists. Its name "
+                        "and SQL were not included in this report."
+                    ),
+                    severity=FindingSeverity.ERROR,
+                )
+            )
 
         run_full_scan = schema_supported and (
             full_scan or database_size <= FULL_SCAN_THRESHOLD_BYTES
@@ -307,7 +329,12 @@ def inspect_database(
             )
 
         status = "ok"
-        if not quick_check_ok or not schema_supported or altered_triggers:
+        if (
+            not quick_check_ok
+            or not schema_supported
+            or altered_triggers
+            or unexpected_trigger_count
+        ):
             status = "error"
         return DatabaseInspection(
             path=database_path,
@@ -321,6 +348,7 @@ def inspect_database(
             schema_columns=columns,
             doctor_triggers=triggers,
             altered_doctor_triggers=altered_triggers,
+            unexpected_doctor_trigger_count=unexpected_trigger_count,
             full_scan_performed=run_full_scan,
             row_count=row_count,
             max_id=max_id,

@@ -33,6 +33,14 @@ from codex_storage_doctor.reports import read_json_object, write_private_json
 
 
 class PlanningTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.version_patch = patch(
+            "codex_storage_doctor.planning.observed_codex_version",
+            return_value=None,
+        )
+        self.version_patch.start()
+        self.addCleanup(self.version_patch.stop)
+
     def test_plan_is_read_only_and_tamper_evident(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = create_database(Path(directory))
@@ -103,6 +111,20 @@ class PlanningTests(unittest.TestCase):
 
 
 class MitigationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.planning_version_patch = patch(
+            "codex_storage_doctor.planning.observed_codex_version",
+            return_value=None,
+        )
+        self.mitigation_version_patch = patch(
+            "codex_storage_doctor.mitigation.observed_codex_version",
+            return_value=None,
+        )
+        self.planning_version_patch.start()
+        self.mitigation_version_patch.start()
+        self.addCleanup(self.planning_version_patch.stop)
+        self.addCleanup(self.mitigation_version_patch.stop)
+
     def _seed(self, database: Path) -> None:
         connection = sqlite3.connect(database)
         for level in ("TRACE", "DEBUG", "INFO", "WARN", "ERROR", "NOTICE"):
@@ -356,6 +378,31 @@ class MitigationTests(unittest.TestCase):
                 )
             self.assertFalse(Path(plan["artifact_root"]).exists())
 
+    def test_known_plan_version_refuses_when_current_version_is_unavailable(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = create_database(root)
+            with patch(
+                "codex_storage_doctor.planning.observed_codex_version",
+                return_value="codex-cli 0.145.0",
+            ):
+                plan = create_plan(database, "balanced")
+            with (
+                patch(
+                    "codex_storage_doctor.mitigation.observed_codex_version",
+                    return_value=None,
+                ),
+                self.assertRaisesRegex(SafetyGateError, "unavailable"),
+            ):
+                apply_plan(
+                    plan,
+                    plan["confirmation_token"],
+                    process_scanner=clear_process_scan,
+                )
+            self.assertFalse(Path(plan["artifact_root"]).exists())
+
     def test_manifest_lifecycle_fields_are_tamper_evident(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = create_database(Path(directory))
@@ -393,6 +440,66 @@ class MitigationTests(unittest.TestCase):
                     manifest["rollback_token"],
                     process_scanner=clear_process_scan,
                 )
+
+    def test_rollback_refuses_unexpected_doctor_trigger(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = create_database(Path(directory))
+            plan = create_plan(database, "balanced")
+            result = apply_plan(
+                plan,
+                plan["confirmation_token"],
+                process_scanner=clear_process_scan,
+            )
+            manifest = read_json_object(Path(result["manifest"]))
+            connection = sqlite3.connect(database)
+            connection.execute(
+                """
+                CREATE TRIGGER codex_storage_doctor_v1_extra
+                AFTER INSERT ON logs
+                BEGIN SELECT 1; END
+                """
+            )
+            connection.commit()
+            connection.close()
+            with self.assertRaisesRegex(SafetyGateError, "unexpected"):
+                rollback(
+                    manifest,
+                    manifest["rollback_token"],
+                    process_scanner=clear_process_scan,
+                    manifest_path=Path(result["manifest"]),
+                )
+
+    def test_already_absent_trigger_reconciles_manifest_lifecycle(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = create_database(Path(directory))
+            plan = create_plan(database, "balanced")
+            result = apply_plan(
+                plan,
+                plan["confirmation_token"],
+                process_scanner=clear_process_scan,
+            )
+            manifest_path = Path(result["manifest"])
+            manifest = read_json_object(manifest_path)
+            connection = sqlite3.connect(database)
+            connection.execute(
+                f'DROP TRIGGER "{TRIGGER_NAMES["balanced"]}"'
+            )
+            connection.commit()
+            connection.close()
+            rollback_result = rollback(
+                manifest,
+                manifest["rollback_token"],
+                process_scanner=clear_process_scan,
+                manifest_path=manifest_path,
+            )
+            self.assertEqual(
+                rollback_result["status"],
+                "already_rolled_back",
+            )
+            self.assertTrue(rollback_result["manifest_reconciled"])
+            reconciled = read_json_object(manifest_path)
+            self.assertEqual(reconciled["status"], "rolled_back")
+            validate_manifest(reconciled)
 
 
 if __name__ == "__main__":

@@ -209,7 +209,7 @@ Exit codes are stable in the frozen contract:
 | `4` | Partial or unsupported inspection |
 | `5` | Mutation safety gate refused |
 | `6` | Unsupported schema or stale plan |
-| `7` | Backup or rollback-artifact failure |
+| `7` | Plan, backup, manifest, or rollback-artifact failure |
 | `8` | SQLite operation failure |
 
 Use `codex-storage-doctor --help` and the subcommand help for the final
@@ -237,6 +237,10 @@ A dependency-free zipapp is also part of the target distribution:
 make zipapp
 python dist/codex-storage-doctor.pyz audit
 ```
+
+`make build` stages source in a fresh temporary tree so ignored incremental
+build caches cannot leak stale modules into the wheel. `make check` rebuilds
+both artifacts and compares every packaged module byte-for-byte with `src/`.
 
 The Codex plugin package under `plugins/codex-storage-doctor/` contains the
 workflow skill, not a second CLI implementation. The Python CLI must be

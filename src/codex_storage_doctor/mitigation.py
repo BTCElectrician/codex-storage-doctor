@@ -294,7 +294,14 @@ def apply_plan(
     current_version = observed_codex_version()
     if (
         isinstance(planned_version, str)
-        and current_version is not None
+        and current_version is None
+    ):
+        raise SafetyGateError(
+            "current Codex version is unavailable; recreate the plan from the "
+            "same external environment"
+        )
+    if (
+        isinstance(planned_version, str)
         and planned_version != current_version
     ):
         raise SafetyGateError(
@@ -331,14 +338,19 @@ def apply_plan(
             raise SafetyGateError("base schema changed since planning")
         preflight_triggers = doctor_triggers_connection(preflight)
         all_preflight_triggers = log_triggers_connection(preflight)
-        conflicting = {
+        conflicting_log_triggers = {
             name: sql
             for name, sql in all_preflight_triggers.items()
             if name != trigger_name or sql != trigger_sql
         }
-        if conflicting:
+        conflicting_doctor_triggers = {
+            name: sql
+            for name, sql in preflight_triggers.items()
+            if name != trigger_name or sql != trigger_sql
+        }
+        if conflicting_log_triggers or conflicting_doctor_triggers:
             raise SafetyGateError(
-                "a conflicting trigger exists on the logs table; rollback or "
+                "a conflicting logs or doctor-prefixed trigger exists; rollback or "
                 "remove that conflict first"
             )
         if preflight_triggers.get(trigger_name) == trigger_sql:
@@ -417,14 +429,19 @@ def apply_plan(
             raise SafetyGateError("base schema changed since planning")
         triggers = doctor_triggers_connection(connection)
         all_triggers = log_triggers_connection(connection)
-        conflicting = {
+        conflicting_log_triggers = {
             name: sql
             for name, sql in all_triggers.items()
             if name != trigger_name or sql != trigger_sql
         }
-        if conflicting:
+        conflicting_doctor_triggers = {
+            name: sql
+            for name, sql in triggers.items()
+            if name != trigger_name or sql != trigger_sql
+        }
+        if conflicting_log_triggers or conflicting_doctor_triggers:
             raise SafetyGateError(
-                "a conflicting trigger exists on the logs table; rollback or "
+                "a conflicting logs or doctor-prefixed trigger exists; rollback or "
                 "remove that conflict first"
             )
         if triggers.get(trigger_name) == trigger_sql:
@@ -530,13 +547,28 @@ def rollback(
             != manifest["base_schema_fingerprint_before"]
         ):
             raise SafetyGateError("base schema changed since mitigation")
-        installed_sql = doctor_triggers_connection(preflight).get(trigger_name)
+        doctor_triggers = doctor_triggers_connection(preflight)
+        unexpected_doctor_triggers = set(doctor_triggers).difference(
+            {trigger_name}
+        )
+        if unexpected_doctor_triggers:
+            raise SafetyGateError(
+                "an unexpected doctor-prefixed trigger exists; refusing rollback"
+            )
+        installed_sql = doctor_triggers.get(trigger_name)
         if installed_sql is None:
+            updated = dict(manifest)
+            updated["status"] = "rolled_back"
+            updated["rolled_back_at"] = _utc_slug()
+            _seal_manifest(updated)
+            if manifest_path is not None:
+                write_private_json(manifest_path, updated, overwrite=True)
             return {
                 "status": "already_rolled_back",
                 "changed": False,
                 "database": str(database),
                 "trigger_name": trigger_name,
+                "manifest_reconciled": manifest_path is not None,
             }
         if sha256_text(installed_sql) != expected_trigger_hash:
             raise SafetyGateError(
@@ -570,15 +602,27 @@ def rollback(
         ):
             raise SafetyGateError("base schema changed since mitigation")
         triggers = doctor_triggers_connection(connection)
+        unexpected_doctor_triggers = set(triggers).difference({trigger_name})
+        if unexpected_doctor_triggers:
+            raise SafetyGateError(
+                "an unexpected doctor-prefixed trigger exists; refusing rollback"
+            )
         installed_sql = triggers.get(trigger_name)
         if installed_sql is None:
             connection.execute("ROLLBACK")
             transaction_open = False
+            updated = dict(manifest)
+            updated["status"] = "rolled_back"
+            updated["rolled_back_at"] = _utc_slug()
+            _seal_manifest(updated)
+            if manifest_path is not None:
+                write_private_json(manifest_path, updated, overwrite=True)
             return {
                 "status": "already_rolled_back",
                 "changed": False,
                 "database": str(database),
                 "trigger_name": trigger_name,
+                "manifest_reconciled": manifest_path is not None,
             }
         if sha256_text(installed_sql) != expected_trigger_hash:
             raise SafetyGateError(
@@ -609,7 +653,8 @@ def rollback(
         connection.close()
 
     with read_only_connection(database) as verify:
-        if doctor_triggers_connection(verify).get(trigger_name) is not None:
+        remaining_doctor_triggers = doctor_triggers_connection(verify)
+        if remaining_doctor_triggers:
             raise SafetyGateError("trigger verification failed after rollback")
         if (
             schema_fingerprint_connection(verify)

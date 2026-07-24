@@ -34,17 +34,19 @@ Last updated: 2026-07-24 (America/Chicago)
 
 Latest completed evidence before the post-fix Sol verdict:
 
-- 53 synthetic unit/integration tests pass on local macOS after the first
-  review correction set.
-- Post-fix `make check` passed: tests, current-source zipapp build/smoke,
+- 58 synthetic unit/integration tests pass on local macOS. The test runner
+  isolates `HOME`, `USERPROFILE`, `CODEX_HOME`, `CODEX_SQLITE_HOME`, and
+  executable lookup from the operator's Codex installation.
+- Post-fix `make check` passed: isolated tests, fresh-staged wheel and zipapp
+  builds, byte-for-byte packaged-source verification, artifact smoke,
   compileall, leak guard, and distribution validation.
-- The post-fix wheel built and installed into a new isolated virtual
-  environment; console `--version` and `--help` passed.
+- The post-fix wheel installed without an index or dependencies into a new
+  isolated virtual environment; the console `--version` smoke passed.
 - Current artifact SHA-256 values:
   - zipapp:
-    `1566907c732d5bfceae767ba57052800538f8517b0c047668962451c150dd939`
+    `94a18063c095785692e132786778cfbb164fb423be1a3d653e9cbd0c520eb9ed`
   - wheel:
-    `e4100c93a140ca80f3fea99b3f09f43ea1ee40c66f8b1eea1c62db654dfe976d`
+    `85401a141a0fb5e14d05e57a803cd0f73655f1b2e8eb82f8f9f7af4f129423c6`
 - Repo marketplace registered and the current plugin installed/enabled under a
   fresh isolated workspace `CODEX_HOME`; the personal Codex home was not
   changed.
@@ -53,8 +55,8 @@ Latest completed evidence before the post-fix Sol verdict:
 - `git diff --check` passed.
 - No real Codex database was mutated.
 
-The post-fix review disposition and source commit will be recorded after the
-fresh reviewer returns.
+The post-fix review disposition and exact source commit will be recorded after
+the fresh reviewer returns.
 
 ## Development-boundary note
 

@@ -192,6 +192,7 @@ class DatabaseInspection:
     schema_columns: tuple[SchemaColumn, ...] = ()
     doctor_triggers: tuple[str, ...] = ()
     altered_doctor_triggers: tuple[str, ...] = ()
+    unexpected_doctor_trigger_count: int = 0
     full_scan_performed: bool = False
     row_count: int | None = None
     max_id: int | None = None
@@ -219,6 +220,9 @@ class DatabaseInspection:
             "schema_columns": [column.to_dict() for column in self.schema_columns],
             "doctor_triggers": list(self.doctor_triggers),
             "altered_doctor_triggers": list(self.altered_doctor_triggers),
+            "unexpected_doctor_trigger_count": (
+                self.unexpected_doctor_trigger_count
+            ),
             "full_scan_performed": self.full_scan_performed,
             "row_count": self.row_count,
             "max_id": self.max_id,

@@ -1,7 +1,7 @@
-.PHONY: test check build zipapp smoke
+.PHONY: test check build zipapp artifacts smoke
 
 test:
-	PYTHONPATH=src python3 -m unittest discover -s tests -v
+	python3 scripts/run_tests.py
 
 check: test smoke
 	python3 -m compileall -q src tests scripts
@@ -9,11 +9,14 @@ check: test smoke
 	python3 scripts/validate_distribution.py
 
 build:
-	python3 -m pip wheel . --no-deps --no-build-isolation -w dist
+	python3 scripts/build_wheel.py
 
 zipapp:
 	python3 scripts/build_zipapp.py
 
-smoke: zipapp
+artifacts: zipapp build
+	python3 scripts/verify_artifacts.py
+
+smoke: artifacts
 	python3 dist/codex-storage-doctor.pyz --version
 	PYTHONPATH=src python3 -m codex_storage_doctor --help >/dev/null

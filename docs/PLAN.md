@@ -356,10 +356,10 @@ artifacts.
 
 Only one doctor trigger may be installed. The base schema fingerprint excludes
 doctor-owned triggers, and the exact trigger SQL is fingerprinted separately.
-Applying a plan whose byte-identical requested trigger already exists is a
-no-op success only when no other trigger conflicts. Switching modes, altered
-doctor SQL, or any additional doctor-owned trigger requires rollback and a new
-plan.
+Applying a plan whose canonical SQL-equivalent requested trigger already
+exists is a no-op success only when no other trigger conflicts. Switching
+modes, altered doctor SQL, or any additional doctor-owned trigger requires
+rollback and a new plan.
 
 ### 5.8 Backup and rollback artifacts
 
@@ -471,6 +471,7 @@ Regression coverage:
 - CLI help and exit codes;
 - wheel build/import/console entry point;
 - dependency-free zipapp build/import/entry point;
+- isolated wheel staging and byte-for-byte packaged-source verification;
 - skill frontmatter and plugin manifest validation;
 - leak guard over repository files.
 
@@ -483,7 +484,8 @@ CI matrix:
 
 Local validation must not touch the operator's live home. Tests override
 `HOME`, `USERPROFILE`, `CODEX_HOME`, and `CODEX_SQLITE_HOME` to temporary
-fixtures and inject fake process adapters.
+fixtures, clear ambient executable lookup, and inject fake process/version
+adapters.
 
 ## 9. Skill and plugin
 

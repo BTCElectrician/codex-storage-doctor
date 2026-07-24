@@ -114,10 +114,10 @@ def schema_fingerprint_connection(connection: sqlite3.Connection) -> str:
         SELECT type, name, tbl_name, COALESCE(sql, '')
         FROM sqlite_master
         WHERE type IN ('table', 'index', 'trigger')
-          AND name NOT LIKE ?
+          AND name NOT GLOB ?
         ORDER BY type, name
         """,
-        (f"{DOCTOR_TRIGGER_PREFIX}%",),
+        (f"{DOCTOR_TRIGGER_PREFIX}*",),
     ).fetchall()
     normalized = [
         [str(kind), str(name), str(table), normalize_sql(str(sql))]
@@ -138,10 +138,10 @@ def doctor_triggers_connection(
         """
         SELECT name, COALESCE(sql, '')
         FROM sqlite_master
-        WHERE type = 'trigger' AND name LIKE ?
+        WHERE type = 'trigger' AND name GLOB ?
         ORDER BY name
         """,
-        (f"{DOCTOR_TRIGGER_PREFIX}%",),
+        (f"{DOCTOR_TRIGGER_PREFIX}*",),
     ).fetchall()
     return {str(name): normalize_sql(str(sql)) for name, sql in rows}
 
@@ -280,14 +280,20 @@ def create_plan(
     requested_name = TRIGGER_NAMES[mode]
     requested_sql = normalize_sql(TRIGGER_SQL[mode])
     requested_digest = sha256_text(requested_sql)
-    conflicting = {
+    conflicting_log_triggers = {
         name: sha256_text(sql)
         for name, sql in all_log_triggers.items()
         if name != requested_name or sql != requested_sql
     }
-    if conflicting:
+    conflicting_doctor_triggers = {
+        name: sha256_text(sql)
+        for name, sql in triggers.items()
+        if name != requested_name or sql != requested_sql
+    }
+    if conflicting_log_triggers or conflicting_doctor_triggers:
         raise PlanError(
-            "conflicting Codex Storage Doctor trigger exists; rollback first"
+            "a conflicting logs or Codex Storage Doctor trigger exists; "
+            "rollback first"
         )
 
     identity = read_file_identity(path)

@@ -29,6 +29,15 @@ def main() -> int:
             "wrong project name",
         )
         require(project["project"]["dependencies"] == [], "runtime deps must be empty")
+        require((ROOT / "scripts" / "build_wheel.py").is_file(), "wheel builder missing")
+        require(
+            (ROOT / "scripts" / "verify_artifacts.py").is_file(),
+            "artifact verifier missing",
+        )
+        require(
+            (ROOT / "scripts" / "run_tests.py").is_file(),
+            "isolated test runner missing",
+        )
 
         manifest = json.loads(MANIFEST.read_text("utf-8"))
         require(manifest["name"] == PLUGIN.name, "plugin name/folder mismatch")
