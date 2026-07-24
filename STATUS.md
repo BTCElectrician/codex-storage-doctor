@@ -20,19 +20,21 @@ Last updated: 2026-07-24 (America/Chicago)
   standard-library implementation, so native Windows mutation intentionally
   fails closed. Linux/Windows behavior is fixture-tested on native hosted
   runners, not validated against a real Codex installation.
-- **Safety hardening awaiting fresh review:** a fresh independent adversarial review of
-  the 82-test local candidate rejected general-use remediation. It found seven
-  P1 classes: ambiguous commit outcomes, post-mutation result-output failure,
-  incomplete handle parsing/timeouts, forward-slash UNC privacy, zipapp exit
-  propagation, incomplete token presentation, and self-handle exclusion. The
-  local correction and adversarial regression set passes; another fresh review
-  remains a release gate.
+- **Safety hardening accepted:** fresh independent adversarial review found no
+  remaining P1/P2 implementation blockers after the correction cycle. The
+  final reviewed implementation covers ambiguous commit outcomes,
+  post-mutation output failures and interruptions, strict handle parsing,
+  path-value privacy, zipapp exit propagation, complete recovery coordinates,
+  self-handle exclusion, and exact post-commit schema/trigger verification.
 - **Published:** public GitHub source repository with `main` as the default
-  branch; the baseline hosted matrix passes and the current correction is
-  unpushed.
+  branch. The reviewed implementation and Windows portability follow-ups are
+  pushed through commit `64fd1022a8cea41f955eac9739d2979eedf43e7a`.
 - **Planned only after operator approval:** package/plugin release, demo
   recording, screenshot, launch post, and any upstream communication.
-- **Blocked for general-use remediation:** fresh post-fix safety acceptance.
+- **Ready to share with documented conditions:** source and audit/remediation
+  workflows passed independent review and the hosted matrix. Native Windows
+  mutation remains intentionally fail-closed; all documented operator gates
+  and limitations still apply.
 - **Not authorized / not done:** package or plugin release, public launch
   communication, persistent personal install, real Codex database mutation,
   deletion, `VACUUM`, sidecar removal, environment or journal-mode changes,
@@ -40,7 +42,7 @@ Last updated: 2026-07-24 (America/Chicago)
 
 ## Local validation
 
-Current uncommitted correction evidence:
+Current accepted evidence:
 
 - 105 synthetic unit/integration tests pass under isolated operator-home and
   executable lookup.
@@ -61,7 +63,15 @@ Current uncommitted correction evidence:
 - `git diff --check` passes.
 - No real Codex database was opened, copied, or mutated by this correction
   work.
-- Fresh hosted CI and post-fix adversarial review remain pending.
+- Fresh hosted CI run `30125384716` passed all six macOS, Ubuntu, and Windows
+  jobs on Python 3.11 and 3.14 for commit
+  `64fd1022a8cea41f955eac9739d2979eedf43e7a`, including tests, packaging,
+  artifact verification, privacy checks, and installation smokes.
+- Fresh-context adversarial review found no remaining P1/P2 implementation
+  blockers and returned **SAFE WITH CONDITIONS** before the exact reviewed
+  implementation was committed. Both subsequent commits were test-only
+  Windows portability corrections and received narrow independent acceptance;
+  no production safety gate changed.
 
 The superseded 82-test candidate had passed its local gate and produced
 artifacts, but the later adversarial review proved that it omitted
@@ -124,6 +134,9 @@ report was removed, the smoke procedure was corrected to isolate `HOME` and
 - Post-fix implementation reviewer: fresh-context `gpt-5.6-sol`, `xhigh`;
   verdict **accepted** at the earlier candidate
 - Later adversarial safety reviewer: fresh-context `gpt-5.6-sol`, `xhigh`;
-  verdict **unsafe to share** for general-use remediation at `450ac0f`;
-  local correction passes; fresh review pending
+  initial verdict **unsafe to share** at `450ac0f`; final corrected snapshot
+  verdict **SAFE WITH CONDITIONS**, with no remaining P1/P2 implementation
+  blockers
+- Hosted final matrix: run `30125384716`, six of six jobs passed on commit
+  `64fd1022a8cea41f955eac9739d2979eedf43e7a`
 - Oracle: not invoked
