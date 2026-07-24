@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -101,8 +102,27 @@ class DistributionTests(unittest.TestCase):
             "rollback-result-private.json",
             "codex-storage-report-private.json",
         )
+        git_executable = shutil.which("git") or shutil.which("git.exe")
+        if git_executable is None and os.name == "nt":
+            windows_candidates = (
+                Path(os.environ.get(variable, "")) / "Git" / "cmd" / "git.exe"
+                for variable in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)")
+                if os.environ.get(variable)
+            )
+            git_executable = next(
+                (
+                    str(candidate)
+                    for candidate in windows_candidates
+                    if candidate.is_file()
+                ),
+                None,
+            )
+        self.assertIsNotNone(
+            git_executable,
+            "Git is required to verify ignore behavior",
+        )
         completed = subprocess.run(
-            ["git", "check-ignore", "--no-index", "--stdin"],
+            [str(git_executable), "check-ignore", "--no-index", "--stdin"],
             cwd=root,
             input="\n".join(representative_paths) + "\n",
             text=True,

@@ -127,7 +127,7 @@ class CLITests(unittest.TestCase):
                     (
                         f'profile = "{profile_canary}"',
                         f'[profiles."{profile_canary}"]',
-                        f'sqlite_home = "{sqlite_home}"',
+                        f"sqlite_home = {json.dumps(str(sqlite_home))}",
                     )
                 ),
                 encoding="utf-8",
@@ -396,7 +396,12 @@ class CLITests(unittest.TestCase):
             )
             self.assertEqual(len(manifests), 1)
             manifest = read_json_object(manifests[0])
-            self.assertIn(str(manifests[0]), rendered)
+            reported_manifest = (
+                Path(str(manifest["backup_path"])).parent
+                / "rollback-manifest.json"
+            )
+            self.assertTrue(reported_manifest.samefile(manifests[0]))
+            self.assertIn(str(reported_manifest), rendered)
             self.assertIn(manifest["rollback_token"], rendered)
             self.assertEqual(
                 refused_output.read_text(encoding="utf-8"),
@@ -446,7 +451,12 @@ class CLITests(unittest.TestCase):
             self.assertEqual(len(manifests), 1)
             manifest = read_json_object(manifests[0])
             self.assertEqual(manifest["status"], "applied")
-            self.assertIn(str(manifests[0]), rendered)
+            reported_manifest = (
+                Path(str(manifest["backup_path"])).parent
+                / "rollback-manifest.json"
+            )
+            self.assertTrue(reported_manifest.samefile(manifests[0]))
+            self.assertIn(str(reported_manifest), rendered)
             self.assertIn(manifest["rollback_token"], rendered)
             self.assertEqual(refused_output.read_text(), "preserve")
 
@@ -493,7 +503,12 @@ class CLITests(unittest.TestCase):
             )
             self.assertEqual(len(manifests), 1)
             manifest = read_json_object(manifests[0])
-            self.assertIn(str(manifests[0]), rendered)
+            reported_manifest = (
+                Path(str(manifest["backup_path"])).parent
+                / "rollback-manifest.json"
+            )
+            self.assertTrue(reported_manifest.samefile(manifests[0]))
+            self.assertIn(str(reported_manifest), rendered)
             self.assertIn(manifest["rollback_token"], rendered)
 
     def test_rollback_reconciliation_survives_optional_output_failure(
@@ -604,10 +619,13 @@ class CLITests(unittest.TestCase):
             self.assertIn(str(manifest_path), rendered)
             self.assertIn(updated["rollback_token"], rendered)
             self.assertEqual(refused_output.read_text(), "preserve")
-            with sqlite3.connect(database) as connection:
+            connection = sqlite3.connect(database)
+            try:
                 trigger_count = connection.execute(
                     "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger'"
                 ).fetchone()[0]
+            finally:
+                connection.close()
             self.assertEqual(trigger_count, 0)
 
     def test_successful_rollback_then_runtime_emit_failure_reconciles(

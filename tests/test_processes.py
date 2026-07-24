@@ -161,7 +161,7 @@ class ProcessAdapterTests(unittest.TestCase):
             real_stat = Path.stat
 
             def fail_pid_stat(path, *args, **kwargs):
-                if path == process:
+                if path.name == "42" and path.parent.name == "proc":
                     raise PermissionError("synthetic stat denial")
                 return real_stat(path, *args, **kwargs)
 

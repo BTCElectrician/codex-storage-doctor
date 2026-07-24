@@ -535,10 +535,14 @@ class MitigationTests(unittest.TestCase):
                 nonlocal calls
                 calls += 1
                 if calls == 3:
-                    with sqlite3.connect(database) as racer:
+                    racer = sqlite3.connect(database)
+                    try:
                         racer.execute(
                             "ALTER TABLE logs ADD COLUMN synthetic_race INTEGER"
                         )
+                        racer.commit()
+                    finally:
+                        racer.close()
                 return schema_fingerprint_connection(connection)
 
             with (
@@ -558,7 +562,8 @@ class MitigationTests(unittest.TestCase):
             self.assertTrue(recovery["mutation_occurred"])
             self.assertTrue(recovery["recovery_required"])
             self.assertEqual(recovery["failure_stage"], "post_commit")
-            with sqlite3.connect(database) as connection:
+            connection = sqlite3.connect(database)
+            try:
                 installed = connection.execute(
                     """
                     SELECT COUNT(*) FROM sqlite_master
@@ -566,6 +571,8 @@ class MitigationTests(unittest.TestCase):
                     """,
                     (TRIGGER_NAMES["balanced"],),
                 ).fetchone()[0]
+            finally:
+                connection.close()
             self.assertEqual(installed, 1)
 
     def test_post_commit_unrelated_logs_trigger_race_requires_recovery(
@@ -580,11 +587,15 @@ class MitigationTests(unittest.TestCase):
                 nonlocal calls
                 calls += 1
                 if calls == 3:
-                    with sqlite3.connect(database) as racer:
+                    racer = sqlite3.connect(database)
+                    try:
                         racer.execute(
                             "CREATE TRIGGER synthetic_unrelated "
                             "BEFORE INSERT ON logs BEGIN SELECT 1; END"
                         )
+                        racer.commit()
+                    finally:
+                        racer.close()
                 return log_triggers_connection(connection)
 
             with (
@@ -617,7 +628,8 @@ class MitigationTests(unittest.TestCase):
                 nonlocal calls
                 calls += 1
                 if calls == 3:
-                    with sqlite3.connect(database) as racer:
+                    racer = sqlite3.connect(database)
+                    try:
                         racer.executescript(
                             """
                             CREATE TABLE synthetic_other (id INTEGER);
@@ -628,6 +640,9 @@ class MitigationTests(unittest.TestCase):
                             END;
                             """
                         )
+                        racer.commit()
+                    finally:
+                        racer.close()
                 return doctor_triggers_connection(connection)
 
             with (
@@ -842,10 +857,13 @@ class MitigationTests(unittest.TestCase):
                     second_plan["confirmation_token"],
                     process_scanner=other_at_final,
                 )
-            with sqlite3.connect(second_database) as connection:
+            connection = sqlite3.connect(second_database)
+            try:
                 trigger_count = connection.execute(
                     "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger'"
                 ).fetchone()[0]
+            finally:
+                connection.close()
             self.assertEqual(trigger_count, 0)
 
     def test_rollback_refuses_replaced_database_identity(self) -> None:
