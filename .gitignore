@@ -20,3 +20,12 @@ outputs/*
 *.db-shm
 *.backup
 *.manifest.json
+.codex-storage-doctor/
+doctor-plan*.json
+plan.json
+apply-result.json
+verify-result.json
+audit-result.json
+rollback-manifest*.json
+rollback-result*.json
+codex-storage-report*.json

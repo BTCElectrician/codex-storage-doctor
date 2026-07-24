@@ -25,12 +25,12 @@ optional reversible mitigation. It is not positioned as:
 
 | Project | Public approach observed | Useful distinction in Codex Storage Doctor |
 | --- | --- | --- |
-| [Codex-Log-Guard](https://github.com/936917144/Codex-Log-Guard) | Cross-platform selective trigger with process gates, backup, and read-only status for a fixed database | Multi-profile discovery, active-vs-stale evidence, synthetic test matrix, immutable plan/rollback artifacts, and plugin packaging |
+| [Codex-Log-Guard](https://github.com/936917144/Codex-Log-Guard) | Cross-platform selective trigger with process gates, backup, and read-only status for a fixed database | Multi-profile discovery, active-vs-stale evidence, synthetic test matrix, self-digested plan/rollback artifacts, and plugin packaging |
 | [codexSSD](https://github.com/0xdefence/codexSSD) | macOS-oriented monitoring and recoverable cleanup around a fixed home | Schema-aware cross-platform discovery, privacy-safe evidence, and no cleanup in v1 |
 | [codex-logs-trigger-patch](https://github.com/yangtzech/codex-logs-trigger-patch) | Cross-platform trigger scripts that stop Codex, back up/replace the DB, change journal mode, and use a short stable-ID sample | No process killing, DB replacement, journal-mode change, or zero-write inference; explicit plan and rollback gates |
 | [codex-tmpram](https://github.com/taigadit/codex-tmpram) | RAM-disk relocation plus a persistent macOS LaunchAgent | No volatile relocation and no scheduler/background job by default |
 | [codex-fix](https://github.com/IchenDEV/codex-fix) | Broader macOS diagnosis/remediation, including cleanup and compaction operations | Narrow diagnostic-log scope; no deletion or `VACUUM` |
-| [agent-tools](https://github.com/AlexJJ009/agent-tools) | Cross-platform and WSL trigger tooling with a direct mutation path | Read-only default, immutable plan, exact token, fail-closed process gates, verified backup, and native-side-only mutation |
+| [agent-tools](https://github.com/AlexJJ009/agent-tools) | Cross-platform and WSL trigger tooling with a direct mutation path | Read-only default, create-only self-digested plan, exact token, fail-closed process gates, verified backup, and native-side-only mutation |
 | [keep-codex-fast](https://github.com/vibeforge1111/keep-codex-fast) | Backup-first skill for broader Codex-state maintenance | Purpose-built diagnostic database evidence; no expansion into conversations, worktrees, or general config cleanup |
 
 Codex Storage Doctor also recognizes a class of macOS gists that install a

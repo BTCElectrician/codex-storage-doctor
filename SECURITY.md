@@ -6,15 +6,15 @@ backup behavior, and bypasses of mutation gates are security issues.
 
 ## Supported versions
 
-This repository is an unpublished local pre-release and has no supported
-public release. Security fixes will be evaluated against the current
-development line until a versioned support policy is published.
+This is a public source alpha. There is no package-index, binary, or public
+plugin release and no long-term support promise. Security fixes are evaluated
+against the current `main` development line until a versioned support policy is
+published.
 
 ## Reporting a vulnerability
 
-If this repository is later published on GitHub and private vulnerability
-reporting is enabled, use the repository's **Security → Report a
-vulnerability** flow.
+If the repository's **Security → Report a vulnerability** flow is available,
+use it.
 
 No private email address or alternate confidential channel is published yet.
 Do not put sensitive details in a public issue. If private reporting is not
@@ -43,7 +43,8 @@ placeholders.
 - a remote or unknown filesystem target can be mutated;
 - stale-plan, file-identity, schema, or trigger-conflict checks can be bypassed;
 - mutation occurs before a complete verified backup;
-- a failure leaves a partial trigger or corrupt rollback artifact;
+- a post-commit failure hides that mutation occurred or omits usable recovery
+  coordinates;
 - rollback drops a trigger it does not exactly own;
 - permissions expose a backup or manifest beyond the user where restrictive
   permissions are supported;
@@ -56,7 +57,7 @@ placeholders.
 The maintainer will first confirm receipt through the available private
 channel, reproduce with synthetic data, assess whether users need an immediate
 stop-use warning, and prepare a bounded fix and regression test. No response
-time or disclosure timeline is promised during the unpublished alpha.
+time or disclosure timeline is promised during the public alpha.
 
 Please do not publicly disclose an unresolved issue that could expose private
 Codex diagnostic content or bypass mutation gates until a safe reporting path

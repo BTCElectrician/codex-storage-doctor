@@ -124,6 +124,32 @@ class SamplingTests(unittest.TestCase):
             self.assertEqual(result.delta.row_count, 0)
             self.assertNotIn("eliminated", str(result.to_dict()).lower())
 
+    def test_generic_database_holder_is_not_reported_as_codex(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            database = Path(temporary) / "logs_2.sqlite"
+            build_database(database)
+            generic_holder = ProcessScan(
+                status="ok",
+                observations=(
+                    ProcessObservation(
+                        pid=456,
+                        surface="database-holder",
+                        executable_basename="node",
+                        is_codex=False,
+                        open_database_ids=("database-001",),
+                    ),
+                ),
+                held_database_paths=(database,),
+            )
+            result = sample_database(
+                database,
+                0,
+                process_scan=generic_holder,
+                sleep_fn=lambda _seconds: None,
+            )
+            self.assertFalse(result.codex_process_observed)
+            self.assertFalse(result.target_open_by_codex)
+
     def test_invalid_duration_is_rejected_before_inspection(self) -> None:
         with self.assertRaisesRegex(ValueError, "non-negative"):
             sample_database("/synthetic/not-opened.sqlite", -1)

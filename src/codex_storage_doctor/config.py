@@ -73,7 +73,7 @@ def load_config_sqlite_homes(path: str | Path) -> tuple[ConfiguredSQLiteHome, ..
             results.append(
                 ConfiguredSQLiteHome(
                     path=_resolved_path(sqlite_home, base=config_path.parent),
-                    source=f"config:profile:{profile_name}",
+                    source="config:profile",
                     profile=profile_name,
                     selected_profile=profile_name == selected_profile,
                 )
@@ -116,7 +116,7 @@ def discover_config_sqlite_homes(
                 results.append(
                     ConfiguredSQLiteHome(
                         path=home.path,
-                        source=f"config_file:{stem}",
+                        source="config_file:profile",
                         profile=stem,
                         selected_profile=False,
                     )

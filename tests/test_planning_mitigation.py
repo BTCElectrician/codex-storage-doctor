@@ -15,19 +15,25 @@ from helpers import (
     partial_process_scan,
 )
 from codex_storage_doctor.mitigation import (
+    MutationRecoveryRequired,
+    RollbackReconciliationRequired,
     SafetyGateError,
     _connect_writable,
     apply_plan,
     rollback,
     validate_manifest,
 )
+from codex_storage_doctor.models import ProcessObservation, ProcessScan
 from codex_storage_doctor.planning import (
     PlanError,
     TRIGGER_NAMES,
     calculate_plan_digest,
     create_plan,
     cross_boundary_reason,
+    doctor_triggers_connection,
+    log_triggers_connection,
     read_only_connection,
+    schema_fingerprint_connection,
     validate_plan_document,
 )
 from codex_storage_doctor.reports import read_json_object, write_private_json
@@ -430,6 +436,418 @@ class MitigationTests(unittest.TestCase):
             with self.assertRaisesRegex(SafetyGateError, "digest mismatch"):
                 validate_manifest(manifest)
 
+    def test_post_commit_manifest_failure_surfaces_durable_recovery(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = create_database(Path(directory))
+            plan = create_plan(database, "balanced")
+            real_write = write_private_json
+
+            def fail_final_manifest(path, value, *, overwrite=False):
+                if overwrite:
+                    raise OSError("synthetic finalization failure")
+                return real_write(path, value, overwrite=overwrite)
+
+            with (
+                patch(
+                    "codex_storage_doctor.mitigation.write_private_json",
+                    side_effect=fail_final_manifest,
+                ),
+                self.assertRaises(MutationRecoveryRequired) as caught,
+            ):
+                apply_plan(
+                    plan,
+                    plan["confirmation_token"],
+                    process_scanner=clear_process_scan,
+                )
+
+            recovery = caught.exception.result
+            self.assertEqual(
+                recovery["status"],
+                "mutation_recovery_required",
+            )
+            self.assertTrue(recovery["mutation_occurred"])
+            self.assertTrue(recovery["recovery_required"])
+            self.assertTrue(recovery["durable_manifest_verified"])
+            manifest = read_json_object(Path(recovery["manifest"]))
+            self.assertEqual(manifest["status"], "prepared")
+            self.assertEqual(
+                recovery["rollback_token"],
+                manifest["rollback_token"],
+            )
+            validate_manifest(manifest)
+            connection = sqlite3.connect(database)
+            try:
+                installed = connection.execute(
+                    """
+                    SELECT COUNT(*) FROM sqlite_master
+                    WHERE type='trigger' AND name=?
+                    """,
+                    (TRIGGER_NAMES["balanced"],),
+                ).fetchone()[0]
+            finally:
+                connection.close()
+            self.assertEqual(installed, 1)
+
+    def test_post_commit_verification_failure_surfaces_recovery(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = create_database(Path(directory))
+            plan = create_plan(database, "balanced")
+            calls = 0
+
+            def fail_post_commit_verification(connection):
+                nonlocal calls
+                calls += 1
+                if calls == 3:
+                    return {}
+                return log_triggers_connection(connection)
+
+            with (
+                patch(
+                    "codex_storage_doctor.mitigation.log_triggers_connection",
+                    side_effect=fail_post_commit_verification,
+                ),
+                self.assertRaises(MutationRecoveryRequired) as caught,
+            ):
+                apply_plan(
+                    plan,
+                    plan["confirmation_token"],
+                    process_scanner=clear_process_scan,
+                )
+
+            recovery = caught.exception.result
+            self.assertEqual(recovery["failure_stage"], "post_commit")
+            self.assertEqual(recovery["failure_code"], "operation_failed")
+            self.assertTrue(Path(recovery["manifest"]).is_file())
+            self.assertTrue(Path(recovery["backup"]).is_file())
+            manifest = read_json_object(Path(recovery["manifest"]))
+            self.assertEqual(
+                recovery["rollback_token"],
+                manifest["rollback_token"],
+            )
+
+    def test_post_commit_schema_race_requires_recovery(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = create_database(Path(directory))
+            plan = create_plan(database, "balanced")
+            calls = 0
+
+            def changed_after_commit(connection):
+                nonlocal calls
+                calls += 1
+                if calls == 3:
+                    with sqlite3.connect(database) as racer:
+                        racer.execute(
+                            "ALTER TABLE logs ADD COLUMN synthetic_race INTEGER"
+                        )
+                return schema_fingerprint_connection(connection)
+
+            with (
+                patch(
+                    "codex_storage_doctor.mitigation.schema_fingerprint_connection",
+                    side_effect=changed_after_commit,
+                ),
+                self.assertRaises(MutationRecoveryRequired) as caught,
+            ):
+                apply_plan(
+                    plan,
+                    plan["confirmation_token"],
+                    process_scanner=clear_process_scan,
+                )
+
+            recovery = caught.exception.result
+            self.assertTrue(recovery["mutation_occurred"])
+            self.assertTrue(recovery["recovery_required"])
+            self.assertEqual(recovery["failure_stage"], "post_commit")
+            with sqlite3.connect(database) as connection:
+                installed = connection.execute(
+                    """
+                    SELECT COUNT(*) FROM sqlite_master
+                    WHERE type='trigger' AND name=?
+                    """,
+                    (TRIGGER_NAMES["balanced"],),
+                ).fetchone()[0]
+            self.assertEqual(installed, 1)
+
+    def test_post_commit_unrelated_logs_trigger_race_requires_recovery(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = create_database(Path(directory))
+            plan = create_plan(database, "maximum")
+            calls = 0
+
+            def extra_trigger_after_commit(connection):
+                nonlocal calls
+                calls += 1
+                if calls == 3:
+                    with sqlite3.connect(database) as racer:
+                        racer.execute(
+                            "CREATE TRIGGER synthetic_unrelated "
+                            "BEFORE INSERT ON logs BEGIN SELECT 1; END"
+                        )
+                return log_triggers_connection(connection)
+
+            with (
+                patch(
+                    "codex_storage_doctor.mitigation.log_triggers_connection",
+                    side_effect=extra_trigger_after_commit,
+                ),
+                self.assertRaises(MutationRecoveryRequired) as caught,
+            ):
+                apply_plan(
+                    plan,
+                    plan["confirmation_token"],
+                    process_scanner=clear_process_scan,
+                )
+
+            recovery = caught.exception.result
+            self.assertTrue(recovery["mutation_occurred"])
+            self.assertTrue(recovery["recovery_required"])
+            self.assertEqual(recovery["failure_stage"], "post_commit")
+
+    def test_post_commit_doctor_trigger_on_other_table_requires_recovery(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = create_database(Path(directory))
+            plan = create_plan(database, "balanced")
+            calls = 0
+
+            def extra_doctor_trigger_after_commit(connection):
+                nonlocal calls
+                calls += 1
+                if calls == 3:
+                    with sqlite3.connect(database) as racer:
+                        racer.executescript(
+                            """
+                            CREATE TABLE synthetic_other (id INTEGER);
+                            CREATE TRIGGER codex_storage_doctor_v1_other
+                            BEFORE INSERT ON synthetic_other
+                            BEGIN
+                                SELECT 1;
+                            END;
+                            """
+                        )
+                return doctor_triggers_connection(connection)
+
+            with (
+                patch(
+                    "codex_storage_doctor.mitigation.doctor_triggers_connection",
+                    side_effect=extra_doctor_trigger_after_commit,
+                ),
+                self.assertRaises(MutationRecoveryRequired) as caught,
+            ):
+                apply_plan(
+                    plan,
+                    plan["confirmation_token"],
+                    process_scanner=clear_process_scan,
+                )
+
+            recovery = caught.exception.result
+            self.assertTrue(recovery["mutation_occurred"])
+            self.assertTrue(recovery["recovery_required"])
+            self.assertEqual(recovery["failure_stage"], "post_commit")
+
+    def test_post_commit_connection_close_failure_surfaces_recovery(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = create_database(Path(directory))
+            plan = create_plan(database, "maximum")
+            real_connect = _connect_writable
+
+            class CloseFailureConnection:
+                def __init__(self, path: Path) -> None:
+                    self.connection = real_connect(path)
+
+                def __getattr__(self, name):
+                    return getattr(self.connection, name)
+
+                def close(self) -> None:
+                    self.connection.close()
+                    raise OSError("synthetic close failure")
+
+            with (
+                patch(
+                    "codex_storage_doctor.mitigation._connect_writable",
+                    side_effect=CloseFailureConnection,
+                ),
+                self.assertRaises(MutationRecoveryRequired) as caught,
+            ):
+                apply_plan(
+                    plan,
+                    plan["confirmation_token"],
+                    process_scanner=clear_process_scan,
+                )
+
+            recovery = caught.exception.result
+            self.assertTrue(recovery["mutation_occurred"])
+            self.assertEqual(
+                recovery["durable_manifest_status"],
+                "applied",
+            )
+            manifest = read_json_object(Path(recovery["manifest"]))
+            self.assertEqual(manifest["status"], "applied")
+            self.assertEqual(
+                recovery["rollback_token"],
+                manifest["rollback_token"],
+            )
+
+    def test_apply_commit_raise_after_success_uses_verified_outcome(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = create_database(Path(directory))
+            plan = create_plan(database, "balanced")
+            real_connect = _connect_writable
+
+            class RaiseAfterCommitConnection:
+                def __init__(self, path: Path) -> None:
+                    self.connection = real_connect(path)
+
+                def __getattr__(self, name):
+                    return getattr(self.connection, name)
+
+                def execute(self, sql, *args):
+                    result = self.connection.execute(sql, *args)
+                    if sql == "COMMIT":
+                        raise sqlite3.OperationalError(
+                            "synthetic error after commit"
+                        )
+                    return result
+
+            with (
+                patch(
+                    "codex_storage_doctor.mitigation._connect_writable",
+                    side_effect=RaiseAfterCommitConnection,
+                ),
+                self.assertRaises(MutationRecoveryRequired) as caught,
+            ):
+                apply_plan(
+                    plan,
+                    plan["confirmation_token"],
+                    process_scanner=clear_process_scan,
+                )
+
+            recovery = caught.exception.result
+            self.assertEqual(recovery["commit_outcome"], "verified_committed")
+            self.assertTrue(recovery["mutation_occurred"])
+            self.assertEqual(recovery["failure_stage"], "commit_outcome")
+
+    def test_apply_ambiguous_commit_outcome_never_reports_refusal(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = create_database(Path(directory))
+            plan = create_plan(database, "maximum")
+            real_connect = _connect_writable
+
+            class RaiseAfterCommitConnection:
+                def __init__(self, path: Path) -> None:
+                    self.connection = real_connect(path)
+
+                def __getattr__(self, name):
+                    return getattr(self.connection, name)
+
+                def execute(self, sql, *args):
+                    result = self.connection.execute(sql, *args)
+                    if sql == "COMMIT":
+                        raise sqlite3.OperationalError("synthetic ambiguity")
+                    return result
+
+            with (
+                patch(
+                    "codex_storage_doctor.mitigation._connect_writable",
+                    side_effect=RaiseAfterCommitConnection,
+                ),
+                patch(
+                    "codex_storage_doctor.mitigation._apply_commit_outcome",
+                    return_value="ambiguous",
+                ),
+                self.assertRaises(MutationRecoveryRequired) as caught,
+            ):
+                apply_plan(
+                    plan,
+                    plan["confirmation_token"],
+                    process_scanner=clear_process_scan,
+                )
+
+            recovery = caught.exception.result
+            self.assertEqual(recovery["commit_outcome"], "ambiguous")
+            self.assertTrue(recovery["commit_may_have_succeeded"])
+            self.assertIsNone(recovery["mutation_occurred"])
+
+    def test_final_gate_ignores_only_own_writable_handle(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = create_database(Path(directory))
+            plan = create_plan(database, "balanced")
+            calls = 0
+
+            def self_only_at_final(*_args, **_kwargs):
+                nonlocal calls
+                calls += 1
+                if calls < 3:
+                    return clear_process_scan()
+                return ProcessScan(
+                    status="ok",
+                    observations=(
+                        ProcessObservation(
+                            pid=os.getpid(),
+                            surface="database-holder",
+                            executable_basename="python",
+                            is_codex=False,
+                            open_database_ids=("database-001",),
+                        ),
+                    ),
+                    held_database_paths=(database,),
+                )
+
+            result = apply_plan(
+                plan,
+                plan["confirmation_token"],
+                process_scanner=self_only_at_final,
+            )
+            self.assertEqual(result["status"], "applied")
+
+            other = ProcessObservation(
+                pid=os.getpid() + 1,
+                surface="database-holder",
+                executable_basename="sqlite3",
+                is_codex=False,
+                open_database_ids=("database-001",),
+            )
+            second_root = Path(directory) / "second"
+            second_root.mkdir()
+            second_database = create_database(second_root)
+            second_plan = create_plan(second_database, "maximum")
+            second_calls = 0
+
+            def other_at_final(*_args, **_kwargs):
+                nonlocal second_calls
+                second_calls += 1
+                if second_calls < 3:
+                    return clear_process_scan()
+                return ProcessScan(
+                    status="ok",
+                    observations=(
+                        ProcessObservation(
+                            pid=os.getpid(),
+                            surface="database-holder",
+                            executable_basename="python",
+                            is_codex=False,
+                            open_database_ids=("database-001",),
+                        ),
+                        other,
+                    ),
+                    held_database_paths=(second_database,),
+                )
+
+            with self.assertRaisesRegex(SafetyGateError, "database is open"):
+                apply_plan(
+                    second_plan,
+                    second_plan["confirmation_token"],
+                    process_scanner=other_at_final,
+                )
+            with sqlite3.connect(second_database) as connection:
+                trigger_count = connection.execute(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger'"
+                ).fetchone()[0]
+            self.assertEqual(trigger_count, 0)
+
     def test_rollback_refuses_replaced_database_identity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -452,6 +870,262 @@ class MitigationTests(unittest.TestCase):
                     manifest["rollback_token"],
                     process_scanner=clear_process_scan,
                 )
+
+    def test_post_commit_rollback_failure_surfaces_reconciliation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = create_database(Path(directory))
+            plan = create_plan(database, "balanced")
+            applied = apply_plan(
+                plan,
+                plan["confirmation_token"],
+                process_scanner=clear_process_scan,
+            )
+            manifest_path = Path(applied["manifest"])
+            manifest = read_json_object(manifest_path)
+            real_write = write_private_json
+
+            def fail_manifest_advance(path, value, *, overwrite=False):
+                if overwrite:
+                    raise OSError("synthetic rollback finalization failure")
+                return real_write(path, value, overwrite=overwrite)
+
+            with (
+                patch(
+                    "codex_storage_doctor.mitigation.write_private_json",
+                    side_effect=fail_manifest_advance,
+                ),
+                self.assertRaises(RollbackReconciliationRequired) as caught,
+            ):
+                rollback(
+                    manifest,
+                    manifest["rollback_token"],
+                    process_scanner=clear_process_scan,
+                    manifest_path=manifest_path,
+                )
+
+            recovery = caught.exception.result
+            self.assertTrue(recovery["rollback_occurred"])
+            self.assertTrue(recovery["reconciliation_required"])
+            durable = read_json_object(manifest_path)
+            self.assertEqual(durable["status"], "applied")
+            self.assertEqual(
+                recovery["rollback_token"],
+                durable["rollback_token"],
+            )
+            connection = sqlite3.connect(database)
+            try:
+                trigger_count = connection.execute(
+                    """
+                    SELECT COUNT(*) FROM sqlite_master
+                    WHERE type='trigger' AND name=?
+                    """,
+                    (TRIGGER_NAMES["balanced"],),
+                ).fetchone()[0]
+            finally:
+                connection.close()
+            self.assertEqual(trigger_count, 0)
+
+            reconciled = rollback(
+                durable,
+                durable["rollback_token"],
+                process_scanner=clear_process_scan,
+                manifest_path=manifest_path,
+            )
+            self.assertEqual(reconciled["status"], "already_rolled_back")
+            self.assertTrue(reconciled["manifest_reconciled"])
+            self.assertEqual(
+                read_json_object(manifest_path)["status"],
+                "rolled_back",
+            )
+
+    def test_post_commit_rollback_close_failure_surfaces_reconciliation(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = create_database(Path(directory))
+            plan = create_plan(database, "maximum")
+            applied = apply_plan(
+                plan,
+                plan["confirmation_token"],
+                process_scanner=clear_process_scan,
+            )
+            manifest_path = Path(applied["manifest"])
+            manifest = read_json_object(manifest_path)
+            real_connect = _connect_writable
+
+            class CloseFailureConnection:
+                def __init__(self, path: Path) -> None:
+                    self.connection = real_connect(path)
+
+                def __getattr__(self, name):
+                    return getattr(self.connection, name)
+
+                def close(self) -> None:
+                    self.connection.close()
+                    raise OSError("synthetic rollback close failure")
+
+            with (
+                patch(
+                    "codex_storage_doctor.mitigation._connect_writable",
+                    side_effect=CloseFailureConnection,
+                ),
+                self.assertRaises(RollbackReconciliationRequired) as caught,
+            ):
+                rollback(
+                    manifest,
+                    manifest["rollback_token"],
+                    process_scanner=clear_process_scan,
+                    manifest_path=manifest_path,
+                )
+
+            recovery = caught.exception.result
+            self.assertTrue(recovery["rollback_occurred"])
+            self.assertEqual(
+                recovery["durable_manifest_status"],
+                "applied",
+            )
+
+    def test_rollback_commit_raise_after_success_uses_verified_outcome(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = create_database(Path(directory))
+            plan = create_plan(database, "balanced")
+            applied = apply_plan(
+                plan,
+                plan["confirmation_token"],
+                process_scanner=clear_process_scan,
+            )
+            manifest_path = Path(applied["manifest"])
+            manifest = read_json_object(manifest_path)
+            real_connect = _connect_writable
+
+            class RaiseAfterCommitConnection:
+                def __init__(self, path: Path) -> None:
+                    self.connection = real_connect(path)
+
+                def __getattr__(self, name):
+                    return getattr(self.connection, name)
+
+                def execute(self, sql, *args):
+                    result = self.connection.execute(sql, *args)
+                    if sql == "COMMIT":
+                        raise sqlite3.OperationalError(
+                            "synthetic error after rollback commit"
+                        )
+                    return result
+
+            with (
+                patch(
+                    "codex_storage_doctor.mitigation._connect_writable",
+                    side_effect=RaiseAfterCommitConnection,
+                ),
+                self.assertRaises(RollbackReconciliationRequired) as caught,
+            ):
+                rollback(
+                    manifest,
+                    manifest["rollback_token"],
+                    process_scanner=clear_process_scan,
+                    manifest_path=manifest_path,
+                )
+
+            recovery = caught.exception.result
+            self.assertEqual(recovery["commit_outcome"], "verified_committed")
+            self.assertTrue(recovery["rollback_occurred"])
+            self.assertEqual(recovery["failure_stage"], "commit_outcome")
+
+    def test_rollback_ambiguous_commit_outcome_never_reports_refusal(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = create_database(Path(directory))
+            plan = create_plan(database, "maximum")
+            applied = apply_plan(
+                plan,
+                plan["confirmation_token"],
+                process_scanner=clear_process_scan,
+            )
+            manifest_path = Path(applied["manifest"])
+            manifest = read_json_object(manifest_path)
+            real_connect = _connect_writable
+
+            class RaiseAfterCommitConnection:
+                def __init__(self, path: Path) -> None:
+                    self.connection = real_connect(path)
+
+                def __getattr__(self, name):
+                    return getattr(self.connection, name)
+
+                def execute(self, sql, *args):
+                    result = self.connection.execute(sql, *args)
+                    if sql == "COMMIT":
+                        raise sqlite3.OperationalError("synthetic ambiguity")
+                    return result
+
+            with (
+                patch(
+                    "codex_storage_doctor.mitigation._connect_writable",
+                    side_effect=RaiseAfterCommitConnection,
+                ),
+                patch(
+                    "codex_storage_doctor.mitigation._rollback_commit_outcome",
+                    return_value="ambiguous",
+                ),
+                self.assertRaises(RollbackReconciliationRequired) as caught,
+            ):
+                rollback(
+                    manifest,
+                    manifest["rollback_token"],
+                    process_scanner=clear_process_scan,
+                    manifest_path=manifest_path,
+                )
+
+            recovery = caught.exception.result
+            self.assertEqual(recovery["commit_outcome"], "ambiguous")
+            self.assertTrue(recovery["commit_may_have_succeeded"])
+            self.assertIsNone(recovery["rollback_occurred"])
+
+    def test_post_commit_rollback_verification_failure_is_reconciliation(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = create_database(Path(directory))
+            plan = create_plan(database, "balanced")
+            applied = apply_plan(
+                plan,
+                plan["confirmation_token"],
+                process_scanner=clear_process_scan,
+            )
+            manifest_path = Path(applied["manifest"])
+            manifest = read_json_object(manifest_path)
+            calls = 0
+
+            def fail_post_commit_verification(connection):
+                nonlocal calls
+                calls += 1
+                if calls == 3:
+                    return {"synthetic_unexpected": "synthetic"}
+                return doctor_triggers_connection(connection)
+
+            with (
+                patch(
+                    "codex_storage_doctor.mitigation.doctor_triggers_connection",
+                    side_effect=fail_post_commit_verification,
+                ),
+                self.assertRaises(RollbackReconciliationRequired) as caught,
+            ):
+                rollback(
+                    manifest,
+                    manifest["rollback_token"],
+                    process_scanner=clear_process_scan,
+                    manifest_path=manifest_path,
+                )
+
+            self.assertTrue(caught.exception.result["rollback_occurred"])
+            self.assertEqual(
+                read_json_object(manifest_path)["status"],
+                "applied",
+            )
 
     def test_rollback_refuses_unexpected_doctor_trigger(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

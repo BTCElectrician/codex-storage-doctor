@@ -4,15 +4,14 @@ Preservation-first diagnosis and reversible mitigation for Codex SQLite
 diagnostic-log churn.
 
 > **Repository status — public source pre-release.** The CLI, tests, skill,
-> plugin, evidence review, and safety model are implemented. A first
-> fresh-context implementation review rejected the candidate and its accepted
-> safety findings were corrected. A second fresh-context Sol review accepted
-> the corrected candidate with no unresolved P0, P1, or P2 findings. The
-> initial public CI run then exposed and drove correction of Windows SQLite
-> handle-lifecycle and fresh-runner packaging gaps; the corrected six-job
-> macOS/Ubuntu/Windows matrix passes. Native Windows mutation remains
-> deliberately unavailable until trustworthy handle evidence can be proven.
-> No package-index release, binary release, or public plugin listing is claimed.
+> plugin, evidence review, and safety model are implemented. A fresh
+> independent adversarial review rejected the later 82-test local candidate
+> for seven P1 safety classes. Those findings now have a local correction set
+> and 98 passing synthetic regressions, but require another fresh
+> post-fix review before the mutation workflow is recommended.
+> Native Windows mutation remains
+> deliberately unavailable until trustworthy handle evidence can be proven. No
+> package-index release, binary release, or public plugin listing is claimed.
 
 Codex Storage Doctor is designed to answer five questions without reading your
 prompts or diagnostic payloads:
@@ -86,8 +85,9 @@ For a privacy-safe support artifact:
 codex-storage-doctor audit --for-support --json --output codex-storage-report.json
 ```
 
-Reports omit absolute paths unless `--reveal-paths` is explicit. Treat even a
-redacted report as potentially sensitive metadata and review it before sharing.
+Reports apply field allowlists and value-level path redaction unless
+`--reveal-paths` is explicit. Treat even a redacted report as potentially
+sensitive metadata and review it before sharing.
 
 ## The safe workflow
 
@@ -125,8 +125,12 @@ disappearing or mistyped target cannot become a new empty database.
 Plan identity binds the resolved path plus device/inode when the OS exposes
 them. Recorded size and mtime are informational: diagnostic rows may normally
 arrive between a read-only plan and a later external-terminal apply. Apply
-rechecks schema/version/trigger state and backs up the latest rows after Codex
-is closed; it refuses if the DB or WAL changes during or after that backup.
+rechecks schema, trigger state, and PATH CLI version consistency and backs up
+the latest rows after Codex is closed. Its backup race check compares file
+identity, size, and high-resolution mtime for the main database and WAL; this is
+a conservative stat-bounded guard, not proof that every possible same-size
+in-place change would be detected. The PATH CLI version is advisory context and
+does not identify a separate Desktop or IDE writer.
 
 Rollback removes only the exact doctor-owned trigger:
 
@@ -170,10 +174,10 @@ The tool keeps four evidence layers separate:
 
 `sqlite_sequence` is a historical AUTOINCREMENT high-water mark. It is not a
 physical-write counter. DB and WAL sizes are not SSD TBW. A correct
-post-mitigation result is bounded, for example: “No known diagnostic
-insert/prune churn was observed during this 30-second interval while Codex was
+post-mitigation result is bounded, for example: “No diagnostic insert or
+retained-row change was observed during this 30-second interval while Codex was
 proven to hold the selected database open.” It is not “Codex no longer writes
-to disk.”
+to disk,” and it does not prove that Codex stopped executing its pruning query.
 
 ## Discovery and platform scope
 
@@ -214,6 +218,7 @@ Exit codes are stable in the frozen contract:
 | `6` | Unsupported schema or stale plan |
 | `7` | Plan, backup, manifest, or rollback-artifact failure |
 | `8` | SQLite operation failure |
+| `9` | Apply/rollback committed or its commit outcome is ambiguous; recovery or reconciliation is required |
 
 Use `codex-storage-doctor --help` and the subcommand help for the final
 installed interface.
@@ -242,8 +247,10 @@ python dist/codex-storage-doctor.pyz audit
 ```
 
 `make build` stages source in a fresh temporary tree so ignored incremental
-build caches cannot leak stale modules into the wheel. `make check` rebuilds
-both artifacts and compares every packaged module byte-for-byte with `src/`.
+build caches cannot leak stale modules into the wheel. Build inputs are pinned,
+and archive timestamps, ordering, and permissions are normalized. `make check`
+rebuilds both artifacts, proves repeated builds are byte-reproducible, and
+compares every packaged module byte-for-byte with `src/`.
 
 The Codex plugin package under `plugins/codex-storage-doctor/` contains the
 workflow skill, not a second CLI implementation. The Python CLI must be
@@ -276,6 +283,8 @@ See `STATUS.md` for the current handoff truth and exact validation record.
   file. `SQLITE_READONLY_CANTINIT` is reported as partial inspection.
 - Process/file-handle visibility differs by platform. Mutation fails closed
   when safety cannot be established.
+- Linux and macOS mutation require successful target-directed `lsof` evidence;
+  a missing or failing `lsof` leaves audit available and refuses mutation.
 - Mutation is limited to recognized local filesystem types; remote, unknown,
   and cross-boundary paths remain audit-only.
 - Native Windows mutation is unavailable in `0.1.0`; run read-only audit there
@@ -292,6 +301,7 @@ See `STATUS.md` for the current handoff truth and exact validation record.
 
 - [Evidence and claim ledger](docs/EVIDENCE.md)
 - [Safety, privacy, backup, and rollback model](docs/SAFETY.md)
+- [Safety-hardening acceptance contract](docs/reviews/SAFETY_HARDENING_ACCEPTANCE.md)
 - [Independent competitive boundary](docs/COMPETITION.md)
 - [90-second synthetic demo and launch checklist](docs/DEMO.md)
 - [Contributing](CONTRIBUTING.md)

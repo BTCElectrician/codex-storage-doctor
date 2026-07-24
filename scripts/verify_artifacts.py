@@ -20,6 +20,11 @@ WHEEL = (
     / "dist"
     / f"codex_storage_doctor-{PROJECT_VERSION}-py3-none-any.whl"
 )
+ZIPAPP_MAIN = (
+    b"# -*- coding: utf-8 -*-\n"
+    b"import codex_storage_doctor.cli\n"
+    b"raise SystemExit(codex_storage_doctor.cli.main())\n"
+)
 
 
 def source_modules() -> dict[str, bytes]:
@@ -43,6 +48,13 @@ def verify_archive(path: Path) -> None:
         for name, source_bytes in expected.items():
             if archive.read(name) != source_bytes:
                 raise ValueError(f"{path.name}: stale source bytes for {name}")
+        if path.suffix == ".pyz":
+            if "__main__.py" not in names:
+                raise ValueError(f"{path.name}: root entry point is missing")
+            if archive.read("__main__.py") != ZIPAPP_MAIN:
+                raise ValueError(
+                    f"{path.name}: root entry point does not propagate CLI exits"
+                )
         if any("__pycache__" in name or name.endswith(".pyc") for name in names):
             raise ValueError(f"{path.name}: bytecode cache found")
 

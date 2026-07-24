@@ -158,8 +158,8 @@ Packaging:
 - `sqlite_inspect.py`: URI read-only connections and allowlisted metadata
   queries.
 - `sampling.py`: bounded before/after logical and process-I/O deltas.
-- `planning.py`: immutable plan creation, database/schema fingerprints, and
-  confirmation token.
+- `planning.py`: create-only self-digested plan creation, database/schema
+  fingerprints, and confirmation token.
 - `mitigation.py`: process-gated backup, trigger application, and rollback.
 - `reports.py`: privacy-safe evidence schema and deterministic JSON.
 - `privacy.py`: redaction and forbidden-field guardrails.
@@ -185,8 +185,8 @@ payload rows. SQLite inspection exposes only allowlisted aggregate values.
 
 - Read-only with respect to the database.
 - Validates schema and current process status.
-- Writes an immutable JSON plan only when `--output` is provided; otherwise
-  prints the plan.
+- Writes a create-only self-digested JSON plan only when `--output` is provided;
+  otherwise prints the plan.
 - Includes target path identity, device/inode identity, informational
   size/mtime, schema fingerprint, current tool-owned trigger state, exact SQL
   effect description, backup destination, process-gate result, and a short
@@ -201,8 +201,10 @@ payload rows. SQLite inspection exposes only allowlisted aggregate values.
 - Re-resolves the target, schema, base fingerprint, exact trigger fingerprint,
   process/file-handle gate, free space, and trigger conflicts immediately
   before writing.
-- Refuses when any Codex surface appears open, when open-handle detection
-  reports the target in use, or when process detection fails.
+- Refuses when any Codex surface appears open, when all-process handle detection
+  reports the target in use, or when target-handle enumeration is incomplete.
+- Linux/macOS mutation requires successful target-directed `lsof` evidence;
+  missing or incomplete evidence remains audit-only.
 - Creates and verifies a consistent SQLite backup, then takes one exclusive
   transaction to repeat every identity/schema/process check and install the
   namespaced trigger. If anything changed during backup, mutation refuses.
@@ -335,8 +337,9 @@ END;
 This preserves `WARN`, `ERROR`, and unknown future levels. It suppresses known
 lower-severity rows; it does not implement target-specific heuristics. Because
 it references `NEW.level`, users must rollback balanced mode before upgrading
-Codex and re-audit after the upgrade. The manifest records the observed Codex
-version so verify can warn on a mismatch.
+Codex and re-audit after the upgrade. The manifest records the observed PATH
+CLI Codex version so verify can warn on a mismatch. This is advisory context;
+it does not bind a separate Desktop or IDE writer version.
 
 Maximum:
 
@@ -384,12 +387,20 @@ Before mutation:
 8. acquire an exclusive transaction, repeat process/identity/schema/trigger
    checks, then apply the trigger or refuse if anything changed.
 
-The manifest records tool/schema versions, the observed Codex version, target
+The manifest records tool/schema versions, the observed PATH CLI Codex version, target
 file identity and absolute path (private artifact only), backup path/hash,
 trigger name/mode, base and exact-trigger fingerprints, timestamps, and
 rollback token. It never records body content. It is written as `prepared`
-before mutation and marked `applied` after post-commit verification, so a
-crash after commit still leaves an exact rollback artifact.
+before mutation and marked `applied` after post-commit verification. Any
+post-commit verification or manifest-finalization failure is reported as
+`mutation_recovery_required` with the prepared manifest path and
+rollback-token recovery information.
+
+A raised `COMMIT` is not assumed to mean either success or failure. After
+closing the writable connection, an independent read-only check classifies the
+exact pre-state, exact post-state, or an ambiguous outcome. Ambiguity uses exit
+9 and preserves all candidate tokens without claiming that mutation definitely
+occurred.
 
 Rollback drops only the exact doctor trigger after a new backup. Automatic
 full-database restore is intentionally not implemented because it could
@@ -399,8 +410,11 @@ overwrite newer diagnostic data or collide with a live WAL.
 
 1. Audit, plan, verify, and evidence are read-only for Codex databases.
 2. No real `~/.codex` mutation occurs in development or tests.
-3. Apply/rollback require an immutable artifact plus an exact token.
-4. Mutation requires Codex closed and process detection healthy.
+3. Apply/rollback require a self-digested artifact plus an exact token; a
+   manifest's digest detects content changes but is not an authenticity
+   signature.
+4. Mutation requires Codex closed and all-process target-handle detection
+   healthy.
 5. Every schema mutation follows a verified backup.
 6. No command deletes rows, removes sidecars, replaces a DB, checkpoints,
    changes journal mode, or runs VACUUM.
@@ -423,6 +437,8 @@ overwrite newer diagnostic data or collide with a live WAL.
 - `6`: schema unsupported or plan stale.
 - `7`: backup/rollback artifact failure.
 - `8`: SQLite operation failure.
+- `9`: apply/rollback committed or its commit outcome is ambiguous; recovery or
+  reconciliation is required.
 
 JSON reports include the same symbolic status so scripts need not infer from
 prose.
@@ -463,7 +479,11 @@ Regression coverage:
 - balanced preserves WARN/ERROR/unknown and blocks TRACE/DEBUG/INFO;
 - maximum blocks all levels;
 - exact, altered, and additional doctor-trigger states are distinguished;
-- verify binds manifest, database, mode, trigger SQL/state, and version;
+- verify binds manifest, database identity, base schema, mode, the complete
+  trigger set, exact trigger SQL/state, and advisory PATH CLI version context;
+- post-commit failures surface mutation and recovery information;
+- generically named processes holding the target block mutation;
+- schema/profile metadata cannot bypass value-level path redaction;
 - backup is valid, restrictive, hashed, and created before trigger mutation;
 - rollback drops only the doctor trigger and creates its own backup;
 - bounded samples calculate deltas without translating them to physical writes;

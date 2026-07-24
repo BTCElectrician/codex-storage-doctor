@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import sqlite3
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -30,6 +31,7 @@ from .planning import (
     validate_log_schema,
     validate_plan_document,
 )
+from .privacy import controlled_error_code
 from .reports import write_private_json
 
 MANIFEST_SCHEMA = "codex-storage-doctor.rollback.v1"
@@ -38,6 +40,28 @@ MIN_FREE_MARGIN = 10 * 1024 * 1024
 
 class SafetyGateError(RuntimeError):
     """A requested mutation failed a preservation gate."""
+
+
+class MutationRecoveryRequired(SafetyGateError):
+    """A mutation committed or its commit outcome could not be disproved."""
+
+    def __init__(self, result: Mapping[str, Any]) -> None:
+        super().__init__(
+            "mutation commit succeeded or may have succeeded; recovery required; "
+            "use the surfaced rollback manifest and token"
+        )
+        self.result = dict(result)
+
+
+class RollbackReconciliationRequired(SafetyGateError):
+    """A rollback committed or its commit outcome could not be disproved."""
+
+    def __init__(self, result: Mapping[str, Any]) -> None:
+        super().__init__(
+            "rollback commit succeeded or may have succeeded; reconciliation "
+            "required; use the surfaced manifest and token"
+        )
+        self.result = dict(result)
 
 
 ProcessScanner = Callable[..., Any]
@@ -62,6 +86,7 @@ def _scan_dict(scan: Any) -> dict[str, Any]:
         "status",
         "processes",
         "open_database_paths",
+        "held_database_paths",
         "errors",
     ):
         if hasattr(scan, name):
@@ -72,6 +97,8 @@ def _scan_dict(scan: Any) -> dict[str, Any]:
 def ensure_process_gate(
     database: Path,
     process_scanner: ProcessScanner | None = None,
+    *,
+    allowed_holder_pids: frozenset[int] = frozenset(),
 ) -> dict[str, Any]:
     if process_scanner is None:
         try:
@@ -100,10 +127,49 @@ def ensure_process_gate(
         )
     processes = data.get("processes") or []
     open_paths = data.get("open_database_paths") or []
-    if processes or open_paths:
+    held_paths = data.get("held_database_paths") or []
+    remaining_processes: list[Any] = []
+    ignored_holder_ids: set[str] = set()
+    remaining_holder_ids: set[str] = set()
+    for process in processes:
+        if not isinstance(process, Mapping):
+            remaining_processes.append(process)
+            continue
+        pid = process.get("pid")
+        raw_open_ids = process.get("open_database_ids")
+        open_ids = (
+            {
+                value
+                for value in raw_open_ids
+                if isinstance(value, str)
+            }
+            if isinstance(raw_open_ids, (list, tuple))
+            else set()
+        )
+        is_known_self_handle = bool(
+            isinstance(pid, int)
+            and pid in allowed_holder_pids
+            and process.get("is_codex") is False
+            and open_ids == {"database-001"}
+        )
+        if is_known_self_handle:
+            ignored_holder_ids.update(open_ids)
+            continue
+        remaining_processes.append(process)
+        remaining_holder_ids.update(open_ids)
+    remaining_held_paths = [
+        value
+        for value in held_paths
+        if not (
+            isinstance(value, str)
+            and value in ignored_holder_ids
+            and value not in remaining_holder_ids
+        )
+    ]
+    if remaining_processes or open_paths or remaining_held_paths:
         raise SafetyGateError(
-            "Codex appears to be running or holding the database; quit every "
-            "Codex Desktop, CLI, IDE, WSL, and native session"
+            "Codex appears to be running or the selected database is open; "
+            "quit every Codex surface and close every database tool"
         )
     return data
 
@@ -276,6 +342,166 @@ def validate_manifest(manifest: Mapping[str, Any]) -> None:
             raise SafetyGateError("rollback manifest file identity is invalid")
 
 
+def _apply_commit_outcome(
+    database: Path,
+    *,
+    trigger_name: str,
+    trigger_sql: str,
+    base_schema_fingerprint: str,
+) -> str:
+    """Verify a raised COMMIT without assuming whether SQLite committed it."""
+
+    try:
+        with read_only_connection(database) as connection:
+            if (
+                schema_fingerprint_connection(connection)
+                != base_schema_fingerprint
+            ):
+                return "ambiguous"
+            triggers = log_triggers_connection(connection)
+    except BaseException:
+        return "ambiguous"
+    if triggers == {trigger_name: trigger_sql}:
+        return "verified_committed"
+    if not triggers:
+        return "verified_not_committed"
+    return "ambiguous"
+
+
+def _rollback_commit_outcome(
+    database: Path,
+    *,
+    trigger_name: str,
+    trigger_sql: str,
+    base_schema_fingerprint: str,
+) -> str:
+    """Verify a raised rollback COMMIT against both possible exact states."""
+
+    try:
+        with read_only_connection(database) as connection:
+            if (
+                schema_fingerprint_connection(connection)
+                != base_schema_fingerprint
+            ):
+                return "ambiguous"
+            triggers = log_triggers_connection(connection)
+    except BaseException:
+        return "ambiguous"
+    if not triggers:
+        return "verified_committed"
+    if triggers == {trigger_name: trigger_sql}:
+        return "verified_not_committed"
+    return "ambiguous"
+
+
+def _post_commit_recovery_result(
+    *,
+    database: Path,
+    trigger_name: str,
+    manifest_path: Path,
+    backup_path: Path,
+    backup_hash: str,
+    prepared_token: str,
+    current_token: str,
+    error: BaseException,
+    commit_outcome: str = "verified_committed",
+    failure_stage: str = "post_commit",
+) -> dict[str, Any]:
+    """Describe a committed mutation without trusting a failed final write."""
+
+    token_candidates = list(dict.fromkeys((prepared_token, current_token)))
+    durable_token: str | None = None
+    durable_status = "unverified"
+    try:
+        with manifest_path.open("r", encoding="utf-8") as handle:
+            durable_manifest = json.load(handle)
+        if isinstance(durable_manifest, dict):
+            validate_manifest(durable_manifest)
+            durable_token = str(durable_manifest["rollback_token"])
+            durable_status = str(durable_manifest["status"])
+    except (OSError, UnicodeError, json.JSONDecodeError, SafetyGateError):
+        pass
+
+    result: dict[str, Any] = {
+        "schema_version": "codex-storage-doctor.apply-recovery-required.v1",
+        "status": "mutation_recovery_required",
+        "changed": True,
+        "mutation_occurred": (
+            True if commit_outcome == "verified_committed" else None
+        ),
+        "commit_may_have_succeeded": commit_outcome == "ambiguous",
+        "commit_outcome": commit_outcome,
+        "recovery_required": True,
+        "database": str(database),
+        "trigger_name": trigger_name,
+        "manifest": str(manifest_path),
+        "backup": str(backup_path),
+        "backup_sha256": backup_hash,
+        "rollback_token": durable_token or prepared_token,
+        "durable_manifest_status": durable_status,
+        "durable_manifest_verified": durable_token is not None,
+        "failure_stage": failure_stage,
+        "failure_code": controlled_error_code(error),
+    }
+    if durable_token is None:
+        result["rollback_token_candidates"] = token_candidates
+    return result
+
+
+def _rollback_reconciliation_result(
+    *,
+    database: Path,
+    trigger_name: str,
+    manifest_path: Path | None,
+    backup_path: Path,
+    backup_hash: str,
+    original_token: str,
+    current_token: str,
+    error: BaseException,
+    commit_outcome: str = "verified_committed",
+    failure_stage: str = "post_commit",
+) -> dict[str, Any]:
+    token_candidates = list(dict.fromkeys((original_token, current_token)))
+    durable_token: str | None = None
+    durable_status = "unverified"
+    if manifest_path is not None:
+        try:
+            with manifest_path.open("r", encoding="utf-8") as handle:
+                durable_manifest = json.load(handle)
+            if isinstance(durable_manifest, dict):
+                validate_manifest(durable_manifest)
+                durable_token = str(durable_manifest["rollback_token"])
+                durable_status = str(durable_manifest["status"])
+        except (OSError, UnicodeError, json.JSONDecodeError, SafetyGateError):
+            pass
+    result: dict[str, Any] = {
+        "schema_version": (
+            "codex-storage-doctor.rollback-reconciliation-required.v1"
+        ),
+        "status": "rollback_reconciliation_required",
+        "changed": True,
+        "rollback_occurred": (
+            True if commit_outcome == "verified_committed" else None
+        ),
+        "commit_may_have_succeeded": commit_outcome == "ambiguous",
+        "commit_outcome": commit_outcome,
+        "reconciliation_required": True,
+        "database": str(database),
+        "trigger_name": trigger_name,
+        "manifest": str(manifest_path) if manifest_path is not None else None,
+        "backup_path": str(backup_path),
+        "backup_sha256": backup_hash,
+        "rollback_token": durable_token or original_token,
+        "durable_manifest_status": durable_status,
+        "durable_manifest_verified": durable_token is not None,
+        "failure_stage": failure_stage,
+        "failure_code": controlled_error_code(error),
+    }
+    if durable_token is None:
+        result["rollback_token_candidates"] = token_candidates
+    return result
+
+
 def apply_plan(
     plan: Mapping[str, Any],
     confirmation: str,
@@ -399,14 +625,21 @@ def apply_plan(
         "file_identity_at_apply": identity.to_dict(),
     }
     _seal_manifest(manifest)
+    prepared_token = str(manifest["rollback_token"])
     write_private_json(manifest_path, manifest)
 
     connection = _connect_writable(database)
     transaction_open = False
+    mutation_committed = False
+    connection_closed = False
     try:
         connection.execute("BEGIN EXCLUSIVE")
         transaction_open = True
-        ensure_process_gate(database, process_scanner)
+        ensure_process_gate(
+            database,
+            process_scanner,
+            allowed_holder_pids=frozenset({os.getpid()}),
+        )
         if _storage_state(database) != storage_before_backup:
             raise SafetyGateError(
                 "database or WAL changed after backup; refusing mutation"
@@ -453,13 +686,61 @@ def apply_plan(
             }
         _quick_check(connection, "source")
         connection.execute(TRIGGER_SQL[mode])
-        connection.execute("COMMIT")
+        try:
+            connection.execute("COMMIT")
+        except BaseException as commit_error:
+            # A DB-API wrapper or filesystem error can be raised after SQLite
+            # has durably committed. Closing first releases any surviving
+            # transaction, then an independent read-only connection proves
+            # either exact pre-state, exact post-state, or ambiguity.
+            transaction_open = False
+            try:
+                connection.close()
+            except BaseException:
+                pass
+            connection_closed = True
+            commit_outcome = _apply_commit_outcome(
+                database,
+                trigger_name=trigger_name,
+                trigger_sql=trigger_sql,
+                base_schema_fingerprint=str(plan["base_schema_fingerprint"]),
+            )
+            if commit_outcome == "verified_not_committed":
+                raise SafetyGateError(
+                    "SQLite refused the exclusive mutation before commit"
+                ) from commit_error
+            raise MutationRecoveryRequired(
+                _post_commit_recovery_result(
+                    database=database,
+                    trigger_name=trigger_name,
+                    manifest_path=manifest_path,
+                    backup_path=backup_path,
+                    backup_hash=backup_hash,
+                    prepared_token=prepared_token,
+                    current_token=str(manifest["rollback_token"]),
+                    error=commit_error,
+                    commit_outcome=commit_outcome,
+                    failure_stage="commit_outcome",
+                )
+            ) from commit_error
         transaction_open = False
+        mutation_committed = True
         with read_only_connection(database) as verify:
-            installed = doctor_triggers_connection(verify)
-            if installed.get(trigger_name) != trigger_sql:
-                raise SafetyGateError("trigger verification failed after commit")
+            installed_logs_triggers = log_triggers_connection(verify)
+            if installed_logs_triggers != {trigger_name: trigger_sql}:
+                raise SafetyGateError(
+                    "exact logs trigger-set verification failed after commit"
+                )
+            installed_doctor_triggers = doctor_triggers_connection(verify)
+            if installed_doctor_triggers != {trigger_name: trigger_sql}:
+                raise SafetyGateError(
+                    "exact doctor trigger-set verification failed after commit"
+                )
             after = schema_fingerprint_connection(verify)
+            if after != plan["base_schema_fingerprint"]:
+                raise SafetyGateError(
+                    "base schema verification failed after commit"
+                )
         manifest["status"] = "applied"
         manifest["applied_at"] = _utc_slug()
         manifest["base_schema_fingerprint_after"] = after
@@ -481,18 +762,69 @@ def apply_plan(
                 connection.execute("ROLLBACK")
             except sqlite3.Error:
                 pass
+        if mutation_committed:
+            raise MutationRecoveryRequired(
+                _post_commit_recovery_result(
+                    database=database,
+                    trigger_name=trigger_name,
+                    manifest_path=manifest_path,
+                    backup_path=backup_path,
+                    backup_hash=backup_hash,
+                    prepared_token=prepared_token,
+                    current_token=str(manifest["rollback_token"]),
+                    error=error,
+                )
+            ) from error
         raise SafetyGateError(
             f"SQLite refused the exclusive mutation: {error}"
         ) from error
-    except BaseException:
+    except BaseException as error:
         if transaction_open:
             try:
                 connection.execute("ROLLBACK")
             except sqlite3.Error:
                 pass
+        if mutation_committed:
+            raise MutationRecoveryRequired(
+                _post_commit_recovery_result(
+                    database=database,
+                    trigger_name=trigger_name,
+                    manifest_path=manifest_path,
+                    backup_path=backup_path,
+                    backup_hash=backup_hash,
+                    prepared_token=prepared_token,
+                    current_token=str(manifest["rollback_token"]),
+                    error=error,
+                )
+            ) from error
         raise
     finally:
-        connection.close()
+        active_error = sys.exc_info()[1]
+        if not connection_closed:
+            try:
+                connection.close()
+            except BaseException as close_error:
+                if active_error is not None:
+                    # Never let a secondary close failure replace the recovery
+                    # or refusal that is already propagating.
+                    pass
+                elif mutation_committed:
+                    raise MutationRecoveryRequired(
+                        _post_commit_recovery_result(
+                            database=database,
+                            trigger_name=trigger_name,
+                            manifest_path=manifest_path,
+                            backup_path=backup_path,
+                            backup_hash=backup_hash,
+                            prepared_token=prepared_token,
+                            current_token=str(manifest["rollback_token"]),
+                            error=close_error,
+                        )
+                    ) from close_error
+                else:
+                    raise SafetyGateError(
+                        "SQLite connection close failed before mutation"
+                    ) from close_error
 
 
 def rollback(
@@ -537,6 +869,7 @@ def rollback(
     backup_path = artifact_dir / f"logs-before-rollback-{_utc_slug()}.sqlite"
     trigger_name = str(manifest["trigger_name"])
     expected_trigger_hash = str(manifest["trigger_sql_sha256"])
+    expected_trigger_sql = normalize_sql(TRIGGER_SQL[str(manifest["mode"])])
 
     with read_only_connection(database) as preflight:
         validate_log_schema(preflight, str(manifest["mode"]))
@@ -582,10 +915,19 @@ def rollback(
     ensure_process_gate(database, process_scanner)
     connection = _connect_writable(database)
     transaction_open = False
+    rollback_committed = False
+    connection_closed = False
+    original_token = str(manifest["rollback_token"])
+    current_token = original_token
+    rollback_record_path = artifact_dir / "rollback-result.json"
     try:
         connection.execute("BEGIN EXCLUSIVE")
         transaction_open = True
-        ensure_process_gate(database, process_scanner)
+        ensure_process_gate(
+            database,
+            process_scanner,
+            allowed_holder_pids=frozenset({os.getpid()}),
+        )
         if _storage_state(database) != storage_before_backup:
             raise SafetyGateError(
                 "database or WAL changed after rollback backup; refusing mutation"
@@ -629,8 +971,43 @@ def rollback(
         _quick_check(connection, "source")
         quoted_name = '"' + trigger_name.replace('"', '""') + '"'
         connection.execute(f"DROP TRIGGER {quoted_name}")
-        connection.execute("COMMIT")
+        try:
+            connection.execute("COMMIT")
+        except BaseException as commit_error:
+            transaction_open = False
+            try:
+                connection.close()
+            except BaseException:
+                pass
+            connection_closed = True
+            commit_outcome = _rollback_commit_outcome(
+                database,
+                trigger_name=trigger_name,
+                trigger_sql=expected_trigger_sql,
+                base_schema_fingerprint=str(
+                    manifest["base_schema_fingerprint_before"]
+                ),
+            )
+            if commit_outcome == "verified_not_committed":
+                raise SafetyGateError(
+                    "SQLite refused the exclusive rollback before commit"
+                ) from commit_error
+            raise RollbackReconciliationRequired(
+                _rollback_reconciliation_result(
+                    database=database,
+                    trigger_name=trigger_name,
+                    manifest_path=manifest_path,
+                    backup_path=backup_path,
+                    backup_hash=backup_hash,
+                    original_token=original_token,
+                    current_token=current_token,
+                    error=commit_error,
+                    commit_outcome=commit_outcome,
+                    failure_stage="commit_outcome",
+                )
+            ) from commit_error
         transaction_open = False
+        rollback_committed = True
     except sqlite3.OperationalError as error:
         if transaction_open:
             try:
@@ -648,37 +1025,80 @@ def rollback(
                 pass
         raise
     finally:
-        connection.close()
+        active_error = sys.exc_info()[1]
+        if not connection_closed:
+            try:
+                connection.close()
+            except BaseException as close_error:
+                if active_error is not None:
+                    pass
+                elif rollback_committed:
+                    raise RollbackReconciliationRequired(
+                        _rollback_reconciliation_result(
+                            database=database,
+                            trigger_name=trigger_name,
+                            manifest_path=manifest_path,
+                            backup_path=backup_path,
+                            backup_hash=backup_hash,
+                            original_token=original_token,
+                            current_token=current_token,
+                            error=close_error,
+                        )
+                    ) from close_error
+                else:
+                    raise SafetyGateError(
+                        "SQLite connection close failed before rollback"
+                    ) from close_error
 
-    with read_only_connection(database) as verify:
-        remaining_doctor_triggers = doctor_triggers_connection(verify)
-        if remaining_doctor_triggers:
-            raise SafetyGateError("trigger verification failed after rollback")
-        if (
-            schema_fingerprint_connection(verify)
-            != manifest["base_schema_fingerprint_before"]
-        ):
-            raise SafetyGateError("base schema changed during rollback")
+    try:
+        with read_only_connection(database) as verify:
+            remaining_doctor_triggers = doctor_triggers_connection(verify)
+            if remaining_doctor_triggers:
+                raise SafetyGateError("trigger verification failed after rollback")
+            if (
+                schema_fingerprint_connection(verify)
+                != manifest["base_schema_fingerprint_before"]
+            ):
+                raise SafetyGateError("base schema changed during rollback")
 
-    updated = dict(manifest)
-    updated["status"] = "rolled_back"
-    updated["rolled_back_at"] = _utc_slug()
-    _seal_manifest(updated)
-    if manifest_path is not None:
-        write_private_json(manifest_path, updated, overwrite=True)
-    rollback_record = {
-        "schema_version": "codex-storage-doctor.rollback-result.v1",
-        "status": "rolled_back",
-        "database": str(database),
-        "trigger_name": trigger_name,
-        "backup_path": str(backup_path),
-        "backup_sha256": backup_hash,
-        "rolled_back_at": _utc_slug(),
-    }
-    rollback_record_path = artifact_dir / "rollback-result.json"
-    write_private_json(rollback_record_path, rollback_record)
-    return {
-        **rollback_record,
-        "changed": True,
-        "record": str(rollback_record_path),
-    }
+        updated = dict(manifest)
+        updated["status"] = "rolled_back"
+        updated["rolled_back_at"] = _utc_slug()
+        _seal_manifest(updated)
+        current_token = str(updated["rollback_token"])
+        if manifest_path is not None:
+            write_private_json(manifest_path, updated, overwrite=True)
+        rollback_record = {
+            "schema_version": "codex-storage-doctor.rollback-result.v1",
+            "status": "rolled_back",
+            "database": str(database),
+            "trigger_name": trigger_name,
+            "backup_path": str(backup_path),
+            "backup_sha256": backup_hash,
+            "rolled_back_at": _utc_slug(),
+        }
+        write_private_json(rollback_record_path, rollback_record)
+        return {
+            **rollback_record,
+            "changed": True,
+            "record": str(rollback_record_path),
+            "manifest": (
+                str(manifest_path) if manifest_path is not None else None
+            ),
+            "rollback_token": current_token,
+        }
+    except BaseException as error:
+        if rollback_committed:
+            raise RollbackReconciliationRequired(
+                _rollback_reconciliation_result(
+                    database=database,
+                    trigger_name=trigger_name,
+                    manifest_path=manifest_path,
+                    backup_path=backup_path,
+                    backup_hash=backup_hash,
+                    original_token=original_token,
+                    current_token=current_token,
+                    error=error,
+                )
+            ) from error
+        raise

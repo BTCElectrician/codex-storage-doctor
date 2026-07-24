@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import re
 from typing import Any
 
 
@@ -30,13 +31,40 @@ FORBIDDEN_OUTPUT_KEYS = frozenset(
         "tool_input",
     }
 )
+_EMBEDDED_POSIX_PATH = re.compile(
+    r"(?<![A-Za-z0-9/])/(?!/)[^\s\"']+"
+)
+_EMBEDDED_WINDOWS_PATH = re.compile(
+    r"(?i)(?<![A-Za-z0-9])(?:[A-Z]:[\\/]|\\\\[^\\/\s]+[\\/])"
+)
+_FORWARD_SLASH_UNC_PATH = re.compile(
+    r"(?i)(?<!http:)(?<!https:)//[^/\s]+/"
+)
+_FILE_URI_PATH = re.compile(r"(?i)\bfile:/+")
 
 
 class PrivacyViolation(ValueError):
     """Raised when a report contains a forbidden raw field."""
 
 
-def assert_privacy_safe(value: Any, *, forbidden_values: Sequence[str] = ()) -> None:
+def contains_absolute_path(value: str) -> bool:
+    """Return whether text contains a POSIX, drive, or UNC absolute path."""
+
+    return bool(
+        _EMBEDDED_POSIX_PATH.search(value)
+        or _EMBEDDED_WINDOWS_PATH.search(value)
+        or _FORWARD_SLASH_UNC_PATH.search(value)
+        or _FILE_URI_PATH.search(value)
+        or value.strip() == "/"
+    )
+
+
+def assert_privacy_safe(
+    value: Any,
+    *,
+    forbidden_values: Sequence[str] = (),
+    forbid_absolute_paths: bool = False,
+) -> None:
     """Recursively reject raw log fields and known fixture canaries.
 
     This is a final serializer boundary, not a substitute for allowlisted SQL.
@@ -59,6 +87,8 @@ def assert_privacy_safe(value: Any, *, forbidden_values: Sequence[str] = ()) -> 
                 visit(child)
             return
         if isinstance(item, str):
+            if forbid_absolute_paths and contains_absolute_path(item):
+                raise PrivacyViolation("report contains an absolute path value")
             for canary in forbidden:
                 if canary in item:
                     raise PrivacyViolation("report contains a forbidden fixture canary")

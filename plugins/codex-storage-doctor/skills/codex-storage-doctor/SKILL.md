@@ -94,13 +94,14 @@ Do not run the mutation from the active Codex conversation.
 
 If the selected database was proven open by Codex during the sample, say only:
 
-> No known diagnostic insert/prune churn was observed during this bounded
+> No diagnostic insert or retained-row change was observed during this bounded
 > interval.
 
 If the selected database was not proven open by Codex, say the stable sample
 does not demonstrate suppression. Pass the rollback manifest to `verify` so it
-can compare the planned and current Codex versions. Never say “Codex no longer
-writes to disk.”
+can compare the planned and current PATH CLI Codex versions. This is advisory
+context, not proof of the Desktop/IDE writer version. Never say “Codex no
+longer writes to disk” or that the pruning query stopped executing.
 
 ### 5. Upgrades and rollback
 
@@ -117,6 +118,7 @@ verified backup first. It never automatically restores an older full database.
 Stop and explain the blocker when:
 
 - process or open-handle detection is partial/error before apply or rollback;
+- target-directed `lsof` evidence is unavailable on Linux or macOS;
 - Codex is running;
 - the schema is unsupported or changed since planning;
 - the path crosses the Windows/WSL boundary;

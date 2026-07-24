@@ -7,7 +7,10 @@ import tempfile
 import unittest
 from unittest import mock
 
-from codex_storage_doctor.privacy import assert_privacy_safe
+from codex_storage_doctor.privacy import (
+    PrivacyViolation,
+    assert_privacy_safe,
+)
 from codex_storage_doctor.sqlite_inspect import inspect_database
 
 
@@ -150,6 +153,63 @@ class SQLiteInspectionTests(unittest.TestCase):
                 self.assertNotIn(canary, rendered)
             self.assertNotIn(str(database), rendered)
             self.assertEqual(database.read_bytes(), before)
+
+    def test_schema_metadata_is_allowlisted_and_path_values_are_rejected(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            database = Path(temporary) / "logs_2.sqlite"
+            build_database(database)
+            private_column = "client_/Users/synthetic/private"
+            private_type = "TYPE_/Users/synthetic/type"
+            connection = sqlite3.connect(database)
+            try:
+                connection.execute(
+                    f'ALTER TABLE logs ADD COLUMN "{private_column}" '
+                    f'"{private_type}"'
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            report = inspect_database(database).to_dict()
+            rendered = json.dumps(report, sort_keys=True)
+            self.assertEqual(
+                report["unrecognized_schema_column_count"],
+                1,
+            )
+            self.assertNotIn(private_column, rendered)
+            self.assertNotIn(private_type, rendered)
+            assert_privacy_safe(report, forbid_absolute_paths=True)
+            with self.assertRaisesRegex(
+                PrivacyViolation,
+                "absolute path",
+            ):
+                assert_privacy_safe(
+                    {"safe_key": f"prefix {private_column} suffix"},
+                    forbid_absolute_paths=True,
+                )
+            for canary in (
+                "/tmp",
+                "/.codex",
+                r"C:\Users\synthetic",
+                r"\\server\private",
+                "//server/share/private",
+                "file:///Users/synthetic/private",
+                "file:///C:/Users/synthetic/private",
+                "/",
+            ):
+                with self.subTest(canary=canary), self.assertRaises(
+                    PrivacyViolation
+                ):
+                    assert_privacy_safe(
+                        {"safe_key": canary},
+                        forbid_absolute_paths=True,
+                    )
+            assert_privacy_safe(
+                {"safe_key": "https://example.com/support"},
+                forbid_absolute_paths=True,
+            )
 
     def test_incompatible_schema_fails_closed_without_body_read(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -19,6 +19,7 @@ class ProcessAdapter(Protocol):
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 _LOG_DATABASE = re.compile(r"^logs_[0-9]+\.sqlite$", re.IGNORECASE)
+PROCESS_SCAN_TIMEOUT_SECONDS = 3.0
 
 
 def _normalized(path: Path) -> str:
@@ -44,12 +45,14 @@ def _is_codex_executable(executable_basename: str) -> bool:
 def _match_database(
     target: Path,
     database_by_key: dict[str, tuple[Path, str]],
+    *,
+    allow_discovery: bool = True,
 ) -> tuple[Path, str] | None:
     key = _normalized(target)
     known = database_by_key.get(key)
     if known is not None:
         return known
-    if not _LOG_DATABASE.fullmatch(target.name):
+    if not allow_discovery or not _LOG_DATABASE.fullmatch(target.name):
         return None
     discovered = target.absolute()
     result = (discovered, f"database-{len(database_by_key) + 1:03d}")
@@ -68,15 +71,132 @@ def _parse_linux_write_bytes(io_path: Path) -> int | None:
     return None
 
 
-def _scan_linux(database_paths: Sequence[Path], *, proc_root: Path) -> ProcessScan:
+def _parse_lsof_holders(
+    output: str,
+    database_by_key: dict[str, tuple[Path, str]],
+    *,
+    allow_discovery: bool,
+    require_target_match: bool,
+) -> tuple[dict[int, dict[str, object]], bool]:
+    """Parse machine fields strictly enough that corruption fails closed."""
+
+    holders: dict[int, dict[str, object]] = {}
+    current_pid: int | None = None
+    current_record_saw_command = False
+    current_record_saw_name = False
+    current_record_matched_target = False
+    malformed = False
+
+    def finish_record() -> None:
+        nonlocal malformed
+        if current_pid is None:
+            return
+        if not current_record_saw_command:
+            malformed = True
+        if not current_record_saw_name:
+            malformed = True
+        if require_target_match and not current_record_matched_target:
+            malformed = True
+
+    for line in output.splitlines():
+        if not line:
+            continue
+        field, value = line[0], line[1:]
+        if field == "p":
+            finish_record()
+            if not value.isdigit():
+                malformed = True
+                current_pid = None
+                continue
+            current_pid = int(value)
+            current_record_saw_command = False
+            current_record_saw_name = False
+            current_record_matched_target = False
+            holders.setdefault(
+                current_pid,
+                {"basename": "unknown", "open_ids": []},
+            )
+            continue
+        if field not in {"c", "f", "n"} or current_pid is None or not value:
+            malformed = True
+            continue
+        holder = holders[current_pid]
+        if field == "c":
+            holder["basename"] = Path(value).name
+            current_record_saw_command = True
+            continue
+        if field == "f":
+            continue
+        current_record_saw_name = True
+        match = _match_database(
+            Path(value),
+            database_by_key,
+            allow_discovery=allow_discovery,
+        )
+        if match is None:
+            if require_target_match:
+                malformed = True
+            continue
+        _, report_id = match
+        open_ids = holder["open_ids"]
+        assert isinstance(open_ids, list)
+        if report_id not in open_ids:
+            open_ids.append(report_id)
+        current_record_matched_target = True
+    finish_record()
+    return holders, malformed
+
+
+def _scan_linux(
+    database_paths: Sequence[Path],
+    *,
+    proc_root: Path,
+    runner: Runner,
+) -> ProcessScan:
     database_by_key = {
         _normalized(path): (path, f"database-{index:03d}")
         for index, path in enumerate(database_paths, start=1)
     }
     observations: list[ProcessObservation] = []
     open_paths: list[Path] = []
+    held_paths: list[Path] = []
     findings: list[Finding] = []
     partial = False
+    target_holders: dict[int, dict[str, object]] = {}
+
+    if database_paths:
+        try:
+            holders = runner(
+                [
+                    "lsof",
+                    "-w",
+                    "-Fpcn",
+                    "--",
+                    *(str(path) for path in database_paths),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=PROCESS_SCAN_TIMEOUT_SECONDS,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            partial = True
+        else:
+            if (
+                holders.returncode not in (0, 1)
+                or bool(holders.stderr.strip())
+                or (holders.returncode == 1 and bool(holders.stdout.strip()))
+            ):
+                partial = True
+            parsed_holders, malformed = _parse_lsof_holders(
+                holders.stdout,
+                database_by_key,
+                allow_discovery=False,
+                require_target_match=True,
+            )
+            target_holders.update(parsed_holders)
+            if malformed or (holders.returncode == 0 and not holders.stdout.strip()):
+                partial = True
 
     try:
         pid_directories = sorted(
@@ -97,13 +217,27 @@ def _scan_linux(database_paths: Sequence[Path], *, proc_root: Path) -> ProcessSc
             ),
         )
 
+    get_effective_uid = getattr(os, "geteuid", None)
+    current_uid = get_effective_uid() if callable(get_effective_uid) else None
+    observed_pids: set[int] = set()
     for pid_directory in pid_directories:
+        pid = int(pid_directory.name)
+        try:
+            if (
+                current_uid is not None
+                and pid_directory.stat().st_uid != current_uid
+            ):
+                continue
+        except OSError:
+            partial = True
+            continue
         try:
             comm = (pid_directory / "comm").read_text(
                 encoding="utf-8", errors="replace"
             ).strip()
         except OSError:
-            # Process exit and permission races are ordinary during enumeration.
+            if pid_directory.exists():
+                partial = True
             continue
         executable_basename = Path(comm).name
         try:
@@ -112,40 +246,103 @@ def _scan_linux(database_paths: Sequence[Path], *, proc_root: Path) -> ProcessSc
             ).name or executable_basename
         except OSError:
             pass
-        if not _is_codex_executable(executable_basename):
-            continue
+        is_codex = _is_codex_executable(executable_basename)
 
-        open_ids: list[str] = []
-        try:
-            descriptors = sorted(
-                (pid_directory / "fd").iterdir(),
-                key=lambda path: int(path.name) if path.name.isdigit() else path.name,
-            )
-            for descriptor in descriptors:
-                try:
-                    target = Path(
-                        os.readlink(descriptor).removesuffix(" (deleted)")
+        holder = target_holders.get(pid)
+        open_ids = (
+            list(holder["open_ids"])
+            if holder is not None
+            else []
+        )
+        if holder is not None:
+            for report_id in open_ids:
+                for matched_path, known_id in database_by_key.values():
+                    if known_id != report_id:
+                        continue
+                    if matched_path not in held_paths:
+                        held_paths.append(matched_path)
+                    if is_codex and matched_path not in open_paths:
+                        open_paths.append(matched_path)
+                    break
+
+        if is_codex:
+            try:
+                descriptors = sorted(
+                    (pid_directory / "fd").iterdir(),
+                    key=lambda path: (
+                        int(path.name) if path.name.isdigit() else path.name
+                    ),
+                )
+                for descriptor in descriptors:
+                    try:
+                        target = Path(
+                            os.readlink(descriptor).removesuffix(" (deleted)")
+                        )
+                    except OSError:
+                        if os.path.lexists(descriptor):
+                            partial = True
+                        continue
+                    match = _match_database(
+                        target,
+                        database_by_key,
+                        allow_discovery=True,
                     )
-                except OSError:
-                    continue
-                match = _match_database(target, database_by_key)
-                if match is None:
-                    continue
-                matched_path, report_id = match
-                if report_id not in open_ids:
-                    open_ids.append(report_id)
-                if matched_path not in open_paths:
-                    open_paths.append(matched_path)
-        except OSError:
-            partial = True
+                    if match is None:
+                        continue
+                    matched_path, report_id = match
+                    if report_id not in open_ids:
+                        open_ids.append(report_id)
+                    if matched_path not in held_paths:
+                        held_paths.append(matched_path)
+                    if matched_path not in open_paths:
+                        open_paths.append(matched_path)
+            except OSError:
+                if pid_directory.exists():
+                    partial = True
 
+        if is_codex or open_ids:
+            observed_pids.add(pid)
+            observations.append(
+                ProcessObservation(
+                    pid=pid,
+                    surface=(
+                        _surface(executable_basename)
+                        if is_codex
+                        else "database-holder"
+                    ),
+                    executable_basename=executable_basename,
+                    is_codex=is_codex,
+                    open_database_ids=tuple(open_ids),
+                    write_bytes=_parse_linux_write_bytes(pid_directory / "io"),
+                )
+            )
+
+    for pid, holder in sorted(target_holders.items()):
+        if pid in observed_pids:
+            continue
+        open_ids = tuple(holder["open_ids"])
+        if not open_ids:
+            continue
+        basename = str(holder["basename"])
+        is_codex = _is_codex_executable(basename)
+        for report_id in open_ids:
+            for matched_path, known_id in database_by_key.values():
+                if known_id != report_id:
+                    continue
+                if matched_path not in held_paths:
+                    held_paths.append(matched_path)
+                if is_codex and matched_path not in open_paths:
+                    open_paths.append(matched_path)
+                break
         observations.append(
             ProcessObservation(
-                pid=int(pid_directory.name),
-                surface=_surface(executable_basename),
-                executable_basename=executable_basename,
-                open_database_ids=tuple(open_ids),
-                write_bytes=_parse_linux_write_bytes(pid_directory / "io"),
+                pid=pid,
+                surface=(
+                    _surface(basename) if is_codex else "database-holder"
+                ),
+                executable_basename=basename,
+                is_codex=is_codex,
+                open_database_ids=open_ids,
             )
         )
 
@@ -153,7 +350,10 @@ def _scan_linux(database_paths: Sequence[Path], *, proc_root: Path) -> ProcessSc
         findings.append(
             Finding(
                 code="process_handle_evidence_partial",
-                message="At least one Codex process handle set could not be inspected.",
+                message=(
+                    "Open-file evidence was incomplete for Codex discovery or "
+                    "the selected database."
+                ),
                 severity=FindingSeverity.WARNING,
                 partial=True,
             )
@@ -162,6 +362,7 @@ def _scan_linux(database_paths: Sequence[Path], *, proc_root: Path) -> ProcessSc
         status="partial" if partial else "ok",
         observations=tuple(observations),
         open_database_paths=tuple(open_paths),
+        held_database_paths=tuple(held_paths),
         handle_evidence_supported=not partial,
         findings=tuple(findings),
     )
@@ -182,8 +383,9 @@ def _scan_macos(
             capture_output=True,
             text=True,
             check=False,
+            timeout=PROCESS_SCAN_TIMEOUT_SECONDS,
         )
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         return ProcessScan(
             status="partial",
             handle_evidence_supported=False,
@@ -196,7 +398,7 @@ def _scan_macos(
                 ),
             ),
         )
-    if result.returncode != 0:
+    if result.returncode != 0 or bool(result.stderr.strip()):
         return ProcessScan(
             status="partial",
             handle_evidence_supported=False,
@@ -214,65 +416,179 @@ def _scan_macos(
         _normalized(path): (path, f"database-{index:03d}")
         for index, path in enumerate(database_paths, start=1)
     }
-    observations: list[ProcessObservation] = []
+    observation_data: dict[int, dict[str, object]] = {}
     open_paths: list[Path] = []
+    held_paths: list[Path] = []
     partial = False
+
+    def observe(
+        pid: int,
+        basename: str,
+        *,
+        is_codex: bool,
+        report_id: str | None = None,
+    ) -> None:
+        data = observation_data.setdefault(
+            pid,
+            {
+                "basename": basename,
+                "is_codex": is_codex,
+                "open_ids": [],
+            },
+        )
+        if is_codex:
+            data["is_codex"] = True
+            data["basename"] = basename
+        open_ids = data["open_ids"]
+        assert isinstance(open_ids, list)
+        if report_id is not None and report_id not in open_ids:
+            open_ids.append(report_id)
+
     for line in result.stdout.splitlines():
-        pid_value, separator, executable = line.strip().partition(" ")
+        stripped = line.strip()
+        if not stripped:
+            continue
+        pid_value, separator, executable = stripped.partition(" ")
         if not separator or not pid_value.isdigit():
+            partial = True
             continue
         basename = Path(executable.strip()).name
+        if not basename:
+            partial = True
+            continue
         if not _is_codex_executable(basename):
             continue
 
-        open_ids: list[str] = []
+        pid = int(pid_value)
+        observe(pid, basename, is_codex=True)
         try:
             handles = runner(
-                ["lsof", "-Fn", "-p", pid_value],
+                ["lsof", "-w", "-Fpcn", "-p", pid_value],
                 capture_output=True,
                 text=True,
                 check=False,
+                timeout=PROCESS_SCAN_TIMEOUT_SECONDS,
             )
-        except OSError:
+        except (OSError, subprocess.TimeoutExpired):
             partial = True
         else:
-            if handles.returncode not in (0, 1):
+            if (
+                handles.returncode not in (0, 1)
+                or bool(handles.stderr.strip())
+                or (handles.returncode == 1 and bool(handles.stdout.strip()))
+            ):
                 partial = True
-            for handle_line in handles.stdout.splitlines():
-                if not handle_line.startswith("n"):
-                    continue
-                match = _match_database(Path(handle_line[1:]), database_by_key)
-                if match is None:
-                    continue
-                matched_path, report_id = match
-                if report_id not in open_ids:
-                    open_ids.append(report_id)
-                if matched_path not in open_paths:
-                    open_paths.append(matched_path)
-
-        observations.append(
-            ProcessObservation(
-                pid=int(pid_value),
-                surface=_surface(basename),
-                executable_basename=basename,
-                open_database_ids=tuple(open_ids),
+            parsed_holders, malformed = _parse_lsof_holders(
+                handles.stdout,
+                database_by_key,
+                allow_discovery=True,
+                require_target_match=False,
             )
-        )
+            if malformed or (
+                handles.returncode == 0 and not handles.stdout.strip()
+            ):
+                partial = True
+            for holder in parsed_holders.values():
+                open_ids = holder["open_ids"]
+                assert isinstance(open_ids, list)
+                for report_id in open_ids:
+                    observe(pid, basename, is_codex=True, report_id=report_id)
+                    for matched_path, known_id in database_by_key.values():
+                        if known_id != report_id:
+                            continue
+                        if matched_path not in held_paths:
+                            held_paths.append(matched_path)
+                        if matched_path not in open_paths:
+                            open_paths.append(matched_path)
+                        break
+
+    if database_paths:
+        try:
+            holders = runner(
+                [
+                    "lsof",
+                    "-w",
+                    "-Fpcn",
+                    "--",
+                    *(str(path) for path in database_paths),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=PROCESS_SCAN_TIMEOUT_SECONDS,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            partial = True
+        else:
+            if (
+                holders.returncode not in (0, 1)
+                or bool(holders.stderr.strip())
+                or (holders.returncode == 1 and bool(holders.stdout.strip()))
+            ):
+                partial = True
+            parsed_holders, malformed = _parse_lsof_holders(
+                holders.stdout,
+                database_by_key,
+                allow_discovery=False,
+                require_target_match=True,
+            )
+            if malformed or (
+                holders.returncode == 0 and not holders.stdout.strip()
+            ):
+                partial = True
+            for current_pid, holder in parsed_holders.items():
+                basename = str(holder["basename"])
+                is_codex = _is_codex_executable(basename)
+                open_ids = holder["open_ids"]
+                assert isinstance(open_ids, list)
+                for report_id in open_ids:
+                    observe(
+                        current_pid,
+                        basename,
+                        is_codex=is_codex,
+                        report_id=report_id,
+                    )
+                    for matched_path, known_id in database_by_key.values():
+                        if known_id != report_id:
+                            continue
+                        if matched_path not in held_paths:
+                            held_paths.append(matched_path)
+                        if is_codex and matched_path not in open_paths:
+                            open_paths.append(matched_path)
+                        break
 
     findings: tuple[Finding, ...] = ()
     if partial:
         findings = (
             Finding(
                 code="process_handle_evidence_partial",
-                message="Open-file evidence was incomplete for a Codex process.",
+                message=(
+                    "Open-file evidence was incomplete for Codex discovery or "
+                    "the selected database."
+                ),
                 severity=FindingSeverity.WARNING,
                 partial=True,
             ),
         )
+    observations = tuple(
+        ProcessObservation(
+            pid=pid,
+            surface=(
+                _surface(str(data["basename"]))
+                if bool(data["is_codex"])
+                else "database-holder"
+            ),
+            executable_basename=str(data["basename"]),
+            is_codex=bool(data["is_codex"]),
+            open_database_ids=tuple(data["open_ids"]),  # type: ignore[arg-type]
+        )
+        for pid, data in sorted(observation_data.items())
+    )
     return ProcessScan(
         status="partial" if partial else "ok",
-        observations=tuple(observations),
+        observations=observations,
         open_database_paths=tuple(open_paths),
+        held_database_paths=tuple(held_paths),
         handle_evidence_supported=not partial,
         findings=findings,
     )
@@ -294,10 +610,15 @@ def _scan_windows(
             capture_output=True,
             text=True,
             check=False,
+            timeout=PROCESS_SCAN_TIMEOUT_SECONDS,
         )
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         result = None
-    if result is None or result.returncode != 0:
+    if (
+        result is None
+        or result.returncode != 0
+        or bool(result.stderr.strip())
+    ):
         return ProcessScan(
             status="partial",
             handle_evidence_supported=False,
@@ -387,7 +708,11 @@ def scan_codex_processes(
     platform_value = sys.platform if platform_name is None else platform_name
     runner_value = _default_runner if runner is None else runner
     if platform_value.lower().startswith("linux"):
-        return _scan_linux(paths, proc_root=Path(proc_root))
+        return _scan_linux(
+            paths,
+            proc_root=Path(proc_root),
+            runner=runner_value,
+        )
     if platform_value.lower().startswith("darwin"):
         return _scan_macos(paths, runner=runner_value)
     if platform_value.lower().startswith(("win", "cygwin")):

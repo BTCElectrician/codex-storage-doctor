@@ -80,7 +80,7 @@ In-scope changes strengthen:
 - deterministic cross-platform discovery;
 - privacy-safe aggregate inspection;
 - active/stale classification;
-- immutable planning and confirmation;
+- create-only self-digested planning and confirmation;
 - process and open-handle gates;
 - verified backup and exact-trigger rollback;
 - bounded verification language;

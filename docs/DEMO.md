@@ -172,16 +172,18 @@ Close with:
 - [x] Windows handle evidence is explicitly partial and mutation fails closed.
 - [x] WSL boundary fixtures cover both directions; cross-boundary mutation
       refuses.
-- [x] Support artifacts exclude seeded payload canaries and paths by default.
+- [x] Corrected support artifacts exclude seeded payload canaries, hostile
+      schema/profile metadata, and paths by default.
 - [x] Apply/rollback prove verified-backup ordering, exact ownership,
-      pre-commit atomicity, and post-commit verification.
-- [x] Missing-path, local-filesystem, altered/additional-trigger, manifest
-      binding, and create-only output regressions pass on synthetic data.
+      pre-commit atomicity, and explicit post-commit recovery.
+- [x] Missing-path, local-filesystem, altered/additional-trigger, exact manifest
+      binding, generic-holder, and create-only output regressions pass on
+      synthetic data.
 - [x] Skill frontmatter, plugin manifest, marketplace, and isolated local
       install validate.
-- [x] Hosted Ubuntu/macOS/Windows CI passes after publication.
-- [x] Fresh-context Sol review has accepted the actual implementation and
-      residual risks.
+- [ ] Hosted Ubuntu/macOS/Windows CI passes on the safety-hardening commit.
+- [ ] Fresh-context adversarial review has accepted the actual corrected
+      implementation and residual risks.
 - [ ] Primary-source statuses and version claims are refreshed immediately
       before any package/plugin release or launch communication.
 - [x] Operator explicitly authorized public repository publication.

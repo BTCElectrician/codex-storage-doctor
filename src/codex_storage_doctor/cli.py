@@ -13,6 +13,8 @@ from typing import Any, Mapping, Sequence
 
 from . import __version__
 from .mitigation import (
+    MutationRecoveryRequired,
+    RollbackReconciliationRequired,
     SafetyGateError,
     apply_plan,
     rollback,
@@ -28,8 +30,14 @@ from .planning import (
     CrossBoundaryError,
     PlanError,
     SafetyBoundaryError,
+    TRIGGER_SQL,
     create_plan,
+    log_triggers_connection,
+    normalize_sql,
     observed_codex_version,
+    read_file_identity,
+    read_only_connection,
+    schema_fingerprint_connection,
     utc_now,
 )
 from .privacy import assert_privacy_safe
@@ -52,6 +60,7 @@ EXIT_SAFETY_REFUSED = 5
 EXIT_STALE_OR_SCHEMA = 6
 EXIT_ARTIFACT = 7
 EXIT_SQLITE = 8
+EXIT_RECOVERY_REQUIRED = 9
 
 
 def _path(value: str) -> Path:
@@ -203,8 +212,12 @@ def _emit(
     json_output: bool,
     output: Path | None,
     text_output: str,
+    forbid_absolute_paths: bool = False,
 ) -> None:
-    assert_privacy_safe(result)
+    assert_privacy_safe(
+        result,
+        forbid_absolute_paths=forbid_absolute_paths,
+    )
     if output is not None:
         target = write_private_json(output, result)
         if not json_output:
@@ -383,6 +396,7 @@ def _run_audit(args: argparse.Namespace) -> int:
         json_output=args.json,
         output=args.output,
         text_output=_audit_text(result),
+        forbid_absolute_paths=not args.reveal_paths,
     )
     return EXIT_PARTIAL if incomplete else EXIT_OK
 
@@ -441,7 +455,7 @@ def _plan_text(plan: Mapping[str, Any], output: Path | None) -> str:
     else:
         lines.append(
             "Save a new plan with --output before applying; apply consumes the "
-            "saved immutable artifact."
+            "saved create-only plan artifact."
         )
     return "\n".join(lines)
 
@@ -463,6 +477,46 @@ def _run_plan(args: argparse.Namespace) -> int:
 
 
 def _apply_text(result: Mapping[str, Any]) -> str:
+    if result.get("recovery_required"):
+        commit_ambiguous = bool(result.get("commit_may_have_succeeded"))
+        lines = [
+            (
+                "MUTATION COMMIT MAY HAVE SUCCEEDED; RECOVERY REQUIRED."
+                if commit_ambiguous
+                else "MUTATION OCCURRED; RECOVERY REQUIRED."
+            ),
+            (
+                "The commit outcome could not be proved from an independent "
+                "read-only check."
+                if commit_ambiguous
+                else "The trigger commit completed, but post-commit verification "
+                "or artifact finalization did not."
+            ),
+            f"Trigger: {result['trigger_name']}",
+            f"Backup: {result['backup']}",
+            f"Rollback manifest: {result['manifest']}",
+        ]
+        candidates = result.get("rollback_token_candidates")
+        tokens = (
+            [str(token) for token in candidates]
+            if isinstance(candidates, (list, tuple)) and candidates
+            else [str(result["rollback_token"])]
+        )
+        if len(tokens) == 1:
+            lines.append(f"Rollback token: {tokens[0]}")
+        else:
+            lines.append("Rollback token candidates:")
+            lines.extend(f"- {token}" for token in tokens)
+        lines.append(
+            "Keep Codex closed. Inspect the durable manifest, then use the token "
+            "stored in that manifest. Candidate commands:"
+        )
+        lines.extend(
+            "codex-storage-doctor rollback "
+            f'--manifest "{result["manifest"]}" --confirm "{token}"'
+            for token in tokens
+        )
+        return "\n".join(lines)
     if not result.get("changed"):
         return "The exact doctor-owned trigger was already installed; no change was made."
     return "\n".join(
@@ -482,13 +536,61 @@ def _apply_text(result: Mapping[str, Any]) -> str:
 
 def _run_apply(args: argparse.Namespace) -> int:
     plan = read_json_object(args.plan)
-    result = apply_plan(plan, args.confirm)
-    _emit(
-        result,
-        json_output=args.json,
-        output=args.output,
-        text_output=_apply_text(result),
-    )
+    try:
+        result = apply_plan(plan, args.confirm)
+    except MutationRecoveryRequired as error:
+        result = error.result
+        recovery_text = _apply_text(result)
+        # Always surface recovery coordinates even if an optional output artifact
+        # cannot be written after the committed mutation.
+        print(recovery_text, file=sys.stderr)
+        if args.json or args.output is not None:
+            try:
+                _emit(
+                    result,
+                    json_output=args.json,
+                    output=args.output,
+                    text_output=recovery_text,
+                )
+            except Exception:
+                print(
+                    "Optional recovery-result output failed. The manifest and "
+                    "rollback token printed above remain the recovery authority.",
+                    file=sys.stderr,
+                )
+        return EXIT_RECOVERY_REQUIRED
+    try:
+        _emit(
+            result,
+            json_output=args.json,
+            output=args.output,
+            text_output=_apply_text(result),
+        )
+    except BaseException as error:
+        if not result.get("changed"):
+            raise
+        recovery = {
+            **result,
+            "schema_version": (
+                "codex-storage-doctor.apply-recovery-required.v1"
+            ),
+            "status": "mutation_recovery_required",
+            "mutation_occurred": True,
+            "commit_may_have_succeeded": False,
+            "commit_outcome": "verified_committed",
+            "recovery_required": True,
+            "failure_stage": "result_output",
+            "failure_code": type(error).__name__.lower(),
+        }
+        print(_apply_text(recovery), file=sys.stderr)
+        if not isinstance(error, Exception):
+            raise
+        print(
+            "The optional result output failed after the mutation. The "
+            "manifest and rollback token printed above remain authoritative.",
+            file=sys.stderr,
+        )
+        return EXIT_RECOVERY_REQUIRED
     return EXIT_OK
 
 
@@ -523,8 +625,9 @@ def _verify_text(result: Mapping[str, Any]) -> str:
         and not sample["logical_change_observed"]
     ):
         lines.append(
-            "No known diagnostic insert/prune churn was observed during this "
-            "bounded interval while Codex held the selected database open."
+            "No diagnostic insert or retained-row change was observed during "
+            "this bounded interval while Codex held the selected database open. "
+            "This does not prove that every pruning query stopped."
         )
     elif not sample["target_open_by_codex"]:
         lines.append(
@@ -537,8 +640,9 @@ def _verify_text(result: Mapping[str, Any]) -> str:
     version = result["version_context"]
     if version["mismatch"]:
         lines.append(
-            "Warning: the observed Codex version differs from the mitigation "
-            "manifest. Roll back, re-audit, and create a new plan."
+            "Warning: the observed PATH CLI Codex version differs from the "
+            "mitigation manifest. This comparison is advisory; roll back, "
+            "re-audit, and create a new plan."
         )
     elif version["comparison"] == "unavailable" and inspection["doctor_triggers"]:
         lines.append(
@@ -569,7 +673,13 @@ def _run_verify(args: argparse.Namespace) -> int:
     manifest_context: dict[str, Any] = {
         "provided": False,
         "matches": True,
+        "database_path_matches": None,
         "database_matches": None,
+        "file_identity_available": None,
+        "file_identity_matches": None,
+        "base_schema_matches": None,
+        "mode_matches": None,
+        "logs_trigger_set_matches": None,
         "expected_trigger_name": None,
         "expected_state": None,
         "exact_trigger_state_matches": None,
@@ -581,36 +691,71 @@ def _run_verify(args: argparse.Namespace) -> int:
         manifest_database = Path(str(manifest["database"])).expanduser().resolve(
             strict=False
         )
-        database_matches = selected_database == manifest_database
+        database_path_matches = selected_database == manifest_database
+        expected_identity = manifest["file_identity_at_apply"]
+        selected_identity = read_file_identity(selected_database)
+        file_identity_available = bool(
+            selected_identity.device
+            and selected_identity.inode
+            and int(expected_identity["device"])
+            and int(expected_identity["inode"])
+        )
+        file_identity_matches = bool(
+            file_identity_available
+            and selected_identity.device == int(expected_identity["device"])
+            and selected_identity.inode == int(expected_identity["inode"])
+        )
+        with read_only_connection(selected_database) as connection:
+            base_schema_matches = (
+                schema_fingerprint_connection(connection)
+                == manifest["base_schema_fingerprint_before"]
+            )
+            actual_logs_triggers = log_triggers_connection(connection)
+
+        mode = str(manifest["mode"])
         trigger_name = str(manifest["trigger_name"])
+        expected_trigger_sql = normalize_sql(TRIGGER_SQL[mode])
         status = str(manifest["status"])
-        exact_present = (
-            trigger_name in inspection.doctor_triggers
-            and trigger_name not in inspection.altered_doctor_triggers
-        )
-        altered_present = trigger_name in inspection.altered_doctor_triggers
-        unexpected_present = bool(
-            inspection.unexpected_doctor_trigger_count
-        )
         if status == "applied":
             expected_state = "present"
-            trigger_state_matches = (
-                exact_present and not altered_present and not unexpected_present
+            expected_logs_triggers = {trigger_name: expected_trigger_sql}
+            mode_matches = (
+                actual_logs_triggers.get(trigger_name) == expected_trigger_sql
             )
         elif status == "rolled_back":
             expected_state = "absent"
-            trigger_state_matches = (
-                not exact_present
-                and not altered_present
-                and not unexpected_present
-            )
+            expected_logs_triggers = {}
+            mode_matches = True
         else:
             expected_state = "indeterminate_prepared"
-            trigger_state_matches = False
+            expected_logs_triggers = {}
+            mode_matches = False
+        logs_trigger_set_matches = (
+            actual_logs_triggers == expected_logs_triggers
+        )
+        trigger_state_matches = bool(
+            logs_trigger_set_matches
+            and not inspection.altered_doctor_triggers
+            and not inspection.unexpected_doctor_trigger_count
+        )
+        database_matches = (
+            database_path_matches and file_identity_matches
+        )
         manifest_context = {
             "provided": True,
-            "matches": database_matches and trigger_state_matches,
+            "matches": bool(
+                database_matches
+                and base_schema_matches
+                and mode_matches
+                and trigger_state_matches
+            ),
+            "database_path_matches": database_path_matches,
             "database_matches": database_matches,
+            "file_identity_available": file_identity_available,
+            "file_identity_matches": file_identity_matches,
+            "base_schema_matches": base_schema_matches,
+            "mode_matches": mode_matches,
+            "logs_trigger_set_matches": logs_trigger_set_matches,
             "expected_trigger_name": trigger_name,
             "expected_state": expected_state,
             "exact_trigger_state_matches": trigger_state_matches,
@@ -647,6 +792,7 @@ def _run_verify(args: argparse.Namespace) -> int:
         json_output=args.json,
         output=args.output,
         text_output=_verify_text(result),
+        forbid_absolute_paths=not args.reveal_paths,
     )
     return (
         EXIT_PARTIAL
@@ -661,6 +807,46 @@ def _run_verify(args: argparse.Namespace) -> int:
 
 
 def _rollback_text(result: Mapping[str, Any]) -> str:
+    if result.get("reconciliation_required"):
+        commit_ambiguous = bool(result.get("commit_may_have_succeeded"))
+        lines = [
+            (
+                "ROLLBACK COMMIT MAY HAVE SUCCEEDED; RECONCILIATION REQUIRED."
+                if commit_ambiguous
+                else "ROLLBACK OCCURRED; RECONCILIATION REQUIRED."
+            ),
+            (
+                "The rollback commit outcome could not be proved from an "
+                "independent read-only check."
+                if commit_ambiguous
+                else "The doctor trigger was removed, but post-commit "
+                "verification or artifact finalization did not complete."
+            ),
+            f"Removed trigger: {result['trigger_name']}",
+            f"Pre-rollback backup: {result['backup_path']}",
+            f"Rollback manifest: {result['manifest']}",
+        ]
+        candidates = result.get("rollback_token_candidates")
+        tokens = (
+            [str(token) for token in candidates]
+            if isinstance(candidates, (list, tuple)) and candidates
+            else [str(result["rollback_token"])]
+        )
+        if len(tokens) == 1:
+            lines.append(f"Rollback token: {tokens[0]}")
+        else:
+            lines.append("Rollback token candidates:")
+            lines.extend(f"- {token}" for token in tokens)
+        lines.append(
+            "Keep Codex closed. Read the durable manifest and repeat rollback "
+            "with the token stored there. Candidate commands:"
+        )
+        lines.extend(
+            "codex-storage-doctor rollback "
+            f'--manifest "{result["manifest"]}" --confirm "{token}"'
+            for token in tokens
+        )
+        return "\n".join(lines)
     if not result.get("changed"):
         return "The doctor-owned trigger was already absent; no change was made."
     return "\n".join(
@@ -676,17 +862,65 @@ def _rollback_text(result: Mapping[str, Any]) -> str:
 def _run_rollback(args: argparse.Namespace) -> int:
     manifest_path = args.manifest.expanduser().resolve()
     manifest = read_json_object(manifest_path)
-    result = rollback(
-        manifest,
-        args.confirm,
-        manifest_path=manifest_path,
-    )
-    _emit(
-        result,
-        json_output=args.json,
-        output=args.output,
-        text_output=_rollback_text(result),
-    )
+    try:
+        result = rollback(
+            manifest,
+            args.confirm,
+            manifest_path=manifest_path,
+        )
+    except RollbackReconciliationRequired as error:
+        result = error.result
+        reconciliation_text = _rollback_text(result)
+        print(reconciliation_text, file=sys.stderr)
+        if args.json or args.output is not None:
+            try:
+                _emit(
+                    result,
+                    json_output=args.json,
+                    output=args.output,
+                    text_output=reconciliation_text,
+                )
+            except Exception:
+                print(
+                    "Optional reconciliation-result output failed. The manifest "
+                    "and rollback token printed above remain authoritative.",
+                    file=sys.stderr,
+                )
+        return EXIT_RECOVERY_REQUIRED
+    try:
+        _emit(
+            result,
+            json_output=args.json,
+            output=args.output,
+            text_output=_rollback_text(result),
+        )
+    except BaseException as error:
+        if not result.get("changed"):
+            raise
+        reconciliation = {
+            **result,
+            "schema_version": (
+                "codex-storage-doctor.rollback-reconciliation-required.v1"
+            ),
+            "status": "rollback_reconciliation_required",
+            "rollback_occurred": True,
+            "commit_may_have_succeeded": False,
+            "commit_outcome": "verified_committed",
+            "reconciliation_required": True,
+            "durable_manifest_status": "rolled_back",
+            "durable_manifest_verified": True,
+            "failure_stage": "result_output",
+            "failure_code": type(error).__name__.lower(),
+        }
+        print(_rollback_text(reconciliation), file=sys.stderr)
+        if not isinstance(error, Exception):
+            raise
+        print(
+            "The optional result output failed after rollback. The updated "
+            "manifest and rollback token printed above remain authoritative.",
+            file=sys.stderr,
+        )
+        return EXIT_RECOVERY_REQUIRED
     return EXIT_OK
 
 

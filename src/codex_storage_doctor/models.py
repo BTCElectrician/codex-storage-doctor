@@ -13,8 +13,14 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Iterable
 
+from .schema import BODY_COLUMNS, REQUIRED_LOG_COLUMNS
+
 
 KNOWN_LEVELS: tuple[str, ...] = ("TRACE", "DEBUG", "INFO", "WARN", "ERROR", "OTHER")
+REPORTABLE_SCHEMA_COLUMNS = REQUIRED_LOG_COLUMNS | BODY_COLUMNS
+REPORTABLE_SQLITE_TYPES = frozenset(
+    {"", "BLOB", "INTEGER", "NUMERIC", "REAL", "TEXT"}
+)
 
 
 class FindingSeverity(StrEnum):
@@ -82,6 +88,7 @@ class ProcessObservation:
     pid: int
     surface: str
     executable_basename: str
+    is_codex: bool = True
     open_database_ids: tuple[str, ...] = ()
     write_bytes: int | None = None
 
@@ -90,6 +97,7 @@ class ProcessObservation:
             "pid": self.pid,
             "surface": self.surface,
             "executable_basename": self.executable_basename,
+            "is_codex": self.is_codex,
             "open_database_ids": list(self.open_database_ids),
             "write_bytes": self.write_bytes,
         }
@@ -100,19 +108,20 @@ class ProcessScan:
     status: str
     observations: tuple[ProcessObservation, ...] = ()
     open_database_paths: tuple[Path, ...] = field(default=(), repr=False)
+    held_database_paths: tuple[Path, ...] = field(default=(), repr=False)
     handle_evidence_supported: bool = True
     findings: tuple[Finding, ...] = ()
 
     @property
     def codex_running(self) -> bool:
-        return bool(self.observations)
+        return any(observation.is_codex for observation in self.observations)
 
     @property
     def total_write_bytes(self) -> int | None:
         values = [
             observation.write_bytes
             for observation in self.observations
-            if observation.write_bytes is not None
+            if observation.is_codex and observation.write_bytes is not None
         ]
         return sum(values) if values else None
 
@@ -121,6 +130,7 @@ class ProcessScan:
             {
                 report_id
                 for observation in self.observations
+                if observation.is_codex
                 for report_id in observation.open_database_ids
             }
         )
@@ -130,6 +140,18 @@ class ProcessScan:
             open_database_ids = [
                 f"open-database-{index:03d}"
                 for index, _ in enumerate(self.open_database_paths, start=1)
+            ]
+        held_database_ids = sorted(
+            {
+                report_id
+                for observation in self.observations
+                for report_id in observation.open_database_ids
+            }
+        )
+        if self.held_database_paths and not held_database_ids:
+            held_database_ids = [
+                f"held-database-{index:03d}"
+                for index, _ in enumerate(self.held_database_paths, start=1)
             ]
         return {
             "status": self.status,
@@ -145,6 +167,7 @@ class ProcessScan:
                 observation.to_dict() for observation in self.observations
             ],
             "open_database_paths": open_database_ids,
+            "held_database_paths": held_database_ids,
             "findings": [finding.to_dict() for finding in self.findings],
         }
 
@@ -157,9 +180,17 @@ class SchemaColumn:
     primary_key_position: int
 
     def to_dict(self) -> dict[str, Any]:
+        name = (
+            self.name
+            if self.name in REPORTABLE_SCHEMA_COLUMNS
+            else "UNRECOGNIZED"
+        )
+        declared_type = self.declared_type.strip().upper()
+        if declared_type not in REPORTABLE_SQLITE_TYPES:
+            declared_type = "OTHER"
         return {
-            "name": self.name,
-            "declared_type": self.declared_type,
+            "name": name,
+            "declared_type": declared_type,
             "not_null": self.not_null,
             "primary_key_position": self.primary_key_position,
         }
@@ -217,7 +248,16 @@ class DatabaseInspection:
             "shm_size_bytes": self.shm_size_bytes,
             "quick_check_ok": self.quick_check_ok,
             "schema_supported": self.schema_supported,
-            "schema_columns": [column.to_dict() for column in self.schema_columns],
+            "schema_column_count": len(self.schema_columns),
+            "unrecognized_schema_column_count": sum(
+                column.name not in REPORTABLE_SCHEMA_COLUMNS
+                for column in self.schema_columns
+            ),
+            "schema_columns": [
+                column.to_dict()
+                for column in self.schema_columns
+                if column.name in REPORTABLE_SCHEMA_COLUMNS
+            ],
             "doctor_triggers": list(self.doctor_triggers),
             "altered_doctor_triggers": list(self.altered_doctor_triggers),
             "unexpected_doctor_trigger_count": (

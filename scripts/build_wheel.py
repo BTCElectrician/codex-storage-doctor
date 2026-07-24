@@ -37,6 +37,8 @@ def build(output_directory: Path) -> Path:
         built = workspace / "dist"
         environment = dict(os.environ)
         environment["PIP_NO_INDEX"] = "1"
+        environment["PYTHONHASHSEED"] = "0"
+        environment["SOURCE_DATE_EPOCH"] = "315532800"
         subprocess.run(
             [
                 sys.executable,

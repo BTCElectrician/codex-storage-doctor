@@ -48,8 +48,8 @@ sqlite_home = "alpha"
                 [home.source for home in homes],
                 [
                     "config:top_level",
-                    "config:profile:alpha",
-                    "config:profile:zeta",
+                    "config:profile",
+                    "config:profile",
                 ],
             )
             self.assertEqual(homes[0].path, root / "top")

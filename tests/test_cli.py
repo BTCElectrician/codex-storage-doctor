@@ -11,9 +11,10 @@ from unittest.mock import patch
 
 from helpers import clear_process_scan, create_database
 from codex_storage_doctor import cli
+from codex_storage_doctor import mitigation
 from codex_storage_doctor.models import ProcessObservation, ProcessScan
-from codex_storage_doctor.planning import create_plan
-from codex_storage_doctor.reports import read_json_object
+from codex_storage_doctor.planning import TRIGGER_SQL, create_plan
+from codex_storage_doctor.reports import read_json_object, write_private_json
 from codex_storage_doctor.sampling import sample_database
 
 
@@ -97,6 +98,74 @@ class CLITests(unittest.TestCase):
                 "PRIVATE-PROCESS",
             ):
                 self.assertNotIn(canary, output)
+
+    def test_support_json_sanitizes_profile_and_schema_path_metadata(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sqlite_home = root / "sqlite-home"
+            sqlite_home.mkdir()
+            database = create_database(sqlite_home)
+            schema_canary = "client_/Users/synthetic/schema-private"
+            type_canary = "TYPE_/Users/synthetic/type-private"
+            connection = sqlite3.connect(database)
+            try:
+                connection.execute(
+                    f'ALTER TABLE logs ADD COLUMN "{schema_canary}" '
+                    f'"{type_canary}"'
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            profile_canary = "/Users/synthetic/profile-private"
+            codex_home = root / "codex-home"
+            codex_home.mkdir()
+            codex_home.joinpath("config.toml").write_text(
+                "\n".join(
+                    (
+                        f'profile = "{profile_canary}"',
+                        f'[profiles."{profile_canary}"]',
+                        f'sqlite_home = "{sqlite_home}"',
+                    )
+                ),
+                encoding="utf-8",
+            )
+            isolated_home = root / "isolated-home"
+            isolated_home.mkdir()
+            stdout = io.StringIO()
+            with (
+                patch.dict(os.environ, {}, clear=True),
+                patch("pathlib.Path.home", return_value=isolated_home),
+                patch.object(
+                    cli,
+                    "scan_codex_processes",
+                    return_value=ProcessScan(status="ok"),
+                ),
+                patch("sys.stdout", stdout),
+            ):
+                code = cli.main(
+                    [
+                        "audit",
+                        "--codex-home",
+                        str(codex_home),
+                        "--for-support",
+                        "--json",
+                    ]
+                )
+
+            self.assertEqual(code, cli.EXIT_OK)
+            rendered = stdout.getvalue()
+            self.assertNotIn(profile_canary, rendered)
+            self.assertNotIn(schema_canary, rendered)
+            self.assertNotIn(type_canary, rendered)
+            report = json.loads(rendered)
+            inspection = report["databases"][0]["inspection"]
+            self.assertEqual(
+                inspection["unrecognized_schema_column_count"],
+                1,
+            )
 
     def test_no_database_returns_stable_exit_code(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -216,6 +285,486 @@ class CLITests(unittest.TestCase):
                     ]
                 )
             self.assertEqual(code, cli.EXIT_OK)
+
+    def test_apply_post_commit_failure_has_distinct_recovery_exit_and_output(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = create_database(root)
+            plan = create_plan(database, "balanced")
+            plan_path = root / "plan.json"
+            write_private_json(plan_path, plan)
+            real_write = mitigation.write_private_json
+
+            def fail_final_manifest(path, value, *, overwrite=False):
+                if overwrite:
+                    raise OSError("synthetic finalization failure")
+                return real_write(path, value, overwrite=overwrite)
+
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with (
+                patch(
+                    "codex_storage_doctor.processes.scan_codex_processes",
+                    side_effect=clear_process_scan,
+                ),
+                patch(
+                    "codex_storage_doctor.mitigation.write_private_json",
+                    side_effect=fail_final_manifest,
+                ),
+                patch("sys.stdout", stdout),
+                patch("sys.stderr", stderr),
+            ):
+                code = cli.main(
+                    [
+                        "apply",
+                        "--plan",
+                        str(plan_path),
+                        "--confirm",
+                        plan["confirmation_token"],
+                        "--json",
+                    ]
+                )
+
+            self.assertEqual(code, cli.EXIT_RECOVERY_REQUIRED)
+            recovery = json.loads(stdout.getvalue())
+            self.assertEqual(
+                recovery["status"],
+                "mutation_recovery_required",
+            )
+            self.assertIn(
+                "MUTATION OCCURRED; RECOVERY REQUIRED",
+                stderr.getvalue(),
+            )
+            manifest = read_json_object(Path(recovery["manifest"]))
+            self.assertEqual(
+                recovery["rollback_token"],
+                manifest["rollback_token"],
+            )
+
+    def test_recovery_coordinates_survive_optional_output_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = create_database(root)
+            plan = create_plan(database, "maximum")
+            plan_path = root / "plan.json"
+            write_private_json(plan_path, plan)
+            refused_output = root / "existing-output.json"
+            refused_output.write_text("do not overwrite", encoding="utf-8")
+            real_write = mitigation.write_private_json
+
+            def fail_final_manifest(path, value, *, overwrite=False):
+                if overwrite:
+                    raise OSError("synthetic finalization failure")
+                return real_write(path, value, overwrite=overwrite)
+
+            stderr = io.StringIO()
+            with (
+                patch(
+                    "codex_storage_doctor.processes.scan_codex_processes",
+                    side_effect=clear_process_scan,
+                ),
+                patch(
+                    "codex_storage_doctor.mitigation.write_private_json",
+                    side_effect=fail_final_manifest,
+                ),
+                patch("sys.stderr", stderr),
+            ):
+                code = cli.main(
+                    [
+                        "apply",
+                        "--plan",
+                        str(plan_path),
+                        "--confirm",
+                        plan["confirmation_token"],
+                        "--output",
+                        str(refused_output),
+                    ]
+                )
+
+            self.assertEqual(code, cli.EXIT_RECOVERY_REQUIRED)
+            rendered = stderr.getvalue()
+            self.assertIn(
+                "MUTATION OCCURRED; RECOVERY REQUIRED",
+                rendered,
+            )
+            manifests = list(
+                (root / ".codex-storage-doctor" / "rollback").glob(
+                    "*/rollback-manifest.json"
+                )
+            )
+            self.assertEqual(len(manifests), 1)
+            manifest = read_json_object(manifests[0])
+            self.assertIn(str(manifests[0]), rendered)
+            self.assertIn(manifest["rollback_token"], rendered)
+            self.assertEqual(
+                refused_output.read_text(encoding="utf-8"),
+                "do not overwrite",
+            )
+
+    def test_successful_apply_then_result_output_failure_exits_recovery(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = create_database(root)
+            plan = create_plan(database, "balanced")
+            plan_path = root / "plan.json"
+            write_private_json(plan_path, plan)
+            refused_output = root / "existing-apply-result.json"
+            refused_output.write_text("preserve", encoding="utf-8")
+            stderr = io.StringIO()
+
+            with (
+                patch(
+                    "codex_storage_doctor.processes.scan_codex_processes",
+                    side_effect=clear_process_scan,
+                ),
+                patch("sys.stderr", stderr),
+            ):
+                code = cli.main(
+                    [
+                        "apply",
+                        "--plan",
+                        str(plan_path),
+                        "--confirm",
+                        plan["confirmation_token"],
+                        "--output",
+                        str(refused_output),
+                    ]
+                )
+
+            self.assertEqual(code, cli.EXIT_RECOVERY_REQUIRED)
+            rendered = stderr.getvalue()
+            self.assertIn("MUTATION OCCURRED; RECOVERY REQUIRED", rendered)
+            manifests = list(
+                (root / ".codex-storage-doctor" / "rollback").glob(
+                    "*/rollback-manifest.json"
+                )
+            )
+            self.assertEqual(len(manifests), 1)
+            manifest = read_json_object(manifests[0])
+            self.assertEqual(manifest["status"], "applied")
+            self.assertIn(str(manifests[0]), rendered)
+            self.assertIn(manifest["rollback_token"], rendered)
+            self.assertEqual(refused_output.read_text(), "preserve")
+
+    def test_successful_apply_then_runtime_emit_failure_exits_recovery(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = create_database(root)
+            plan = create_plan(database, "balanced")
+            plan_path = root / "plan.json"
+            write_private_json(plan_path, plan)
+            stderr = io.StringIO()
+
+            with (
+                patch(
+                    "codex_storage_doctor.processes.scan_codex_processes",
+                    side_effect=clear_process_scan,
+                ),
+                patch.object(
+                    cli,
+                    "_emit",
+                    side_effect=RuntimeError("synthetic renderer failure"),
+                ),
+                patch("sys.stderr", stderr),
+            ):
+                code = cli.main(
+                    [
+                        "apply",
+                        "--plan",
+                        str(plan_path),
+                        "--confirm",
+                        plan["confirmation_token"],
+                    ]
+                )
+
+            self.assertEqual(code, cli.EXIT_RECOVERY_REQUIRED)
+            rendered = stderr.getvalue()
+            self.assertIn("MUTATION OCCURRED; RECOVERY REQUIRED", rendered)
+            manifests = list(
+                (root / ".codex-storage-doctor" / "rollback").glob(
+                    "*/rollback-manifest.json"
+                )
+            )
+            self.assertEqual(len(manifests), 1)
+            manifest = read_json_object(manifests[0])
+            self.assertIn(str(manifests[0]), rendered)
+            self.assertIn(manifest["rollback_token"], rendered)
+
+    def test_rollback_reconciliation_survives_optional_output_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = create_database(root)
+            plan = create_plan(database, "balanced")
+            applied = cli.apply_plan(
+                plan,
+                plan["confirmation_token"],
+                process_scanner=clear_process_scan,
+            )
+            manifest_path = Path(applied["manifest"])
+            manifest = read_json_object(manifest_path)
+            refused_output = root / "existing-rollback-output.json"
+            refused_output.write_text("do not overwrite", encoding="utf-8")
+            real_write = mitigation.write_private_json
+
+            def fail_manifest_advance(path, value, *, overwrite=False):
+                if overwrite:
+                    raise OSError("synthetic rollback finalization failure")
+                return real_write(path, value, overwrite=overwrite)
+
+            stderr = io.StringIO()
+            with (
+                patch(
+                    "codex_storage_doctor.processes.scan_codex_processes",
+                    side_effect=clear_process_scan,
+                ),
+                patch(
+                    "codex_storage_doctor.mitigation.write_private_json",
+                    side_effect=fail_manifest_advance,
+                ),
+                patch("sys.stderr", stderr),
+            ):
+                code = cli.main(
+                    [
+                        "rollback",
+                        "--manifest",
+                        str(manifest_path),
+                        "--confirm",
+                        manifest["rollback_token"],
+                        "--output",
+                        str(refused_output),
+                    ]
+                )
+
+            self.assertEqual(code, cli.EXIT_RECOVERY_REQUIRED)
+            rendered = stderr.getvalue()
+            self.assertIn(
+                "ROLLBACK OCCURRED; RECONCILIATION REQUIRED",
+                rendered,
+            )
+            self.assertIn(str(manifest_path), rendered)
+            self.assertIn(manifest["rollback_token"], rendered)
+            self.assertEqual(
+                refused_output.read_text(encoding="utf-8"),
+                "do not overwrite",
+            )
+
+    def test_successful_rollback_then_result_output_failure_reconciles(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = create_database(root)
+            plan = create_plan(database, "maximum")
+            applied = cli.apply_plan(
+                plan,
+                plan["confirmation_token"],
+                process_scanner=clear_process_scan,
+            )
+            manifest_path = Path(applied["manifest"])
+            manifest = read_json_object(manifest_path)
+            refused_output = root / "existing-rollback-result.json"
+            refused_output.write_text("preserve", encoding="utf-8")
+            stderr = io.StringIO()
+
+            with (
+                patch(
+                    "codex_storage_doctor.processes.scan_codex_processes",
+                    side_effect=clear_process_scan,
+                ),
+                patch("sys.stderr", stderr),
+            ):
+                code = cli.main(
+                    [
+                        "rollback",
+                        "--manifest",
+                        str(manifest_path),
+                        "--confirm",
+                        manifest["rollback_token"],
+                        "--output",
+                        str(refused_output),
+                    ]
+                )
+
+            self.assertEqual(code, cli.EXIT_RECOVERY_REQUIRED)
+            rendered = stderr.getvalue()
+            self.assertIn(
+                "ROLLBACK OCCURRED; RECONCILIATION REQUIRED",
+                rendered,
+            )
+            updated = read_json_object(manifest_path)
+            self.assertEqual(updated["status"], "rolled_back")
+            self.assertIn(str(manifest_path), rendered)
+            self.assertIn(updated["rollback_token"], rendered)
+            self.assertEqual(refused_output.read_text(), "preserve")
+            with sqlite3.connect(database) as connection:
+                trigger_count = connection.execute(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger'"
+                ).fetchone()[0]
+            self.assertEqual(trigger_count, 0)
+
+    def test_successful_rollback_then_runtime_emit_failure_reconciles(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = create_database(root)
+            plan = create_plan(database, "maximum")
+            applied = cli.apply_plan(
+                plan,
+                plan["confirmation_token"],
+                process_scanner=clear_process_scan,
+            )
+            manifest_path = Path(applied["manifest"])
+            manifest = read_json_object(manifest_path)
+            stderr = io.StringIO()
+
+            with (
+                patch(
+                    "codex_storage_doctor.processes.scan_codex_processes",
+                    side_effect=clear_process_scan,
+                ),
+                patch.object(
+                    cli,
+                    "_emit",
+                    side_effect=RuntimeError("synthetic renderer failure"),
+                ),
+                patch("sys.stderr", stderr),
+            ):
+                code = cli.main(
+                    [
+                        "rollback",
+                        "--manifest",
+                        str(manifest_path),
+                        "--confirm",
+                        manifest["rollback_token"],
+                    ]
+                )
+
+            self.assertEqual(code, cli.EXIT_RECOVERY_REQUIRED)
+            rendered = stderr.getvalue()
+            self.assertIn(
+                "ROLLBACK OCCURRED; RECONCILIATION REQUIRED",
+                rendered,
+            )
+            updated = read_json_object(manifest_path)
+            self.assertEqual(updated["status"], "rolled_back")
+            self.assertIn(str(manifest_path), rendered)
+            self.assertIn(updated["rollback_token"], rendered)
+
+    def test_post_mutation_emit_does_not_swallow_base_exceptions(self) -> None:
+        apply_result = {
+            "changed": True,
+            "database": "/synthetic/logs_2.sqlite",
+            "trigger_name": "codex_storage_doctor_v1_balanced",
+            "manifest": "/synthetic/rollback-manifest.json",
+            "backup": "/synthetic/backup.sqlite",
+            "backup_sha256": "a" * 64,
+            "rollback_token": "ROLLBACK-SYNTHETIC",
+        }
+        apply_args = cli.build_parser().parse_args(
+            [
+                "apply",
+                "--plan",
+                "/synthetic/plan.json",
+                "--confirm",
+                "APPLY-SYNTHETIC",
+            ]
+        )
+        rollback_result = {
+            "changed": True,
+            "database": "/synthetic/logs_2.sqlite",
+            "trigger_name": "codex_storage_doctor_v1_balanced",
+            "manifest": "/synthetic/rollback-manifest.json",
+            "backup_path": "/synthetic/backup.sqlite",
+            "backup_sha256": "a" * 64,
+            "rollback_token": "ROLLBACK-SYNTHETIC",
+            "record": "/synthetic/rollback-result.json",
+        }
+        rollback_args = cli.build_parser().parse_args(
+            [
+                "rollback",
+                "--manifest",
+                "/synthetic/rollback-manifest.json",
+                "--confirm",
+                "ROLLBACK-SYNTHETIC",
+            ]
+        )
+        operations = (
+            (
+                "apply",
+                cli._run_apply,
+                apply_args,
+                "apply_plan",
+                apply_result,
+                "MUTATION OCCURRED; RECOVERY REQUIRED",
+            ),
+            (
+                "rollback",
+                cli._run_rollback,
+                rollback_args,
+                "rollback",
+                rollback_result,
+                "ROLLBACK OCCURRED; RECONCILIATION REQUIRED",
+            ),
+        )
+        interruptions = (
+            ("KeyboardInterrupt", KeyboardInterrupt()),
+            ("SystemExit", SystemExit(17)),
+        )
+        for (
+            operation,
+            runner,
+            args,
+            mutation_name,
+            result,
+            heading,
+        ) in operations:
+            for interruption_name, interruption in interruptions:
+                stderr = io.StringIO()
+                with (
+                    self.subTest(
+                        operation=operation,
+                        interruption=interruption_name,
+                    ),
+                    patch.object(cli, "read_json_object", return_value={}),
+                    patch.object(cli, mutation_name, return_value=result),
+                    patch.object(cli, "_emit", side_effect=interruption),
+                    patch("sys.stderr", stderr),
+                    self.assertRaises(type(interruption)),
+                ):
+                    runner(args)
+                rendered = stderr.getvalue()
+                self.assertIn(heading, rendered)
+                self.assertIn(result["manifest"], rendered)
+                self.assertIn(result["rollback_token"], rendered)
+
+    def test_default_recovery_text_surfaces_every_token_candidate(self) -> None:
+        common = {
+            "trigger_name": "codex_storage_doctor_balanced",
+            "manifest": "/synthetic/rollback-manifest.json",
+            "backup": "/synthetic/backup.sqlite",
+            "backup_path": "/synthetic/backup.sqlite",
+            "rollback_token": "ROLLBACK-FIRST",
+            "rollback_token_candidates": [
+                "ROLLBACK-FIRST",
+                "ROLLBACK-SECOND",
+            ],
+        }
+        apply_text = cli._apply_text({**common, "recovery_required": True})
+        rollback_text = cli._rollback_text(
+            {**common, "reconciliation_required": True}
+        )
+        for rendered in (apply_text, rollback_text):
+            self.assertIn("ROLLBACK-FIRST", rendered)
+            self.assertIn("ROLLBACK-SECOND", rendered)
 
     def test_plan_output_is_private_where_supported(self) -> None:
         if os.name == "nt":
@@ -466,6 +1015,119 @@ class CLITests(unittest.TestCase):
                     ]
                 )
             self.assertEqual(mismatch_code, cli.EXIT_PARTIAL)
+
+    def test_verify_refuses_replacement_with_expected_trigger(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = create_database(root)
+            plan = create_plan(database, "balanced")
+            result = cli.apply_plan(
+                plan,
+                plan["confirmation_token"],
+                process_scanner=clear_process_scan,
+            )
+            manifest_path = Path(result["manifest"])
+            replacement_root = root / "replacement"
+            replacement_root.mkdir()
+            replacement = create_database(replacement_root)
+            database.unlink()
+            replacement.replace(database)
+            connection = sqlite3.connect(database)
+            try:
+                connection.execute(TRIGGER_SQL["balanced"])
+                connection.commit()
+            finally:
+                connection.close()
+
+            def sampled(path, seconds):
+                return sample_database(
+                    path,
+                    seconds,
+                    process_scan=ProcessScan(status="ok"),
+                    sleep_fn=lambda _seconds: None,
+                )
+
+            stdout = io.StringIO()
+            with (
+                patch.object(cli, "sample_database", side_effect=sampled),
+                patch("sys.stdout", stdout),
+            ):
+                code = cli.main(
+                    [
+                        "verify",
+                        "--database",
+                        str(database),
+                        "--manifest",
+                        str(manifest_path),
+                        "--sample-seconds",
+                        "0",
+                        "--json",
+                    ]
+                )
+
+            self.assertEqual(code, cli.EXIT_PARTIAL)
+            context = json.loads(stdout.getvalue())["manifest_context"]
+            self.assertTrue(context["database_path_matches"])
+            self.assertFalse(context["file_identity_matches"])
+            self.assertFalse(context["database_matches"])
+            self.assertFalse(context["matches"])
+
+    def test_verify_refuses_unexpected_non_doctor_logs_trigger(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = create_database(root)
+            plan = create_plan(database, "maximum")
+            result = cli.apply_plan(
+                plan,
+                plan["confirmation_token"],
+                process_scanner=clear_process_scan,
+            )
+            manifest_path = Path(result["manifest"])
+            connection = sqlite3.connect(database)
+            try:
+                connection.execute(
+                    """
+                    CREATE TRIGGER synthetic_unrelated_logs_trigger
+                    AFTER INSERT ON logs
+                    BEGIN SELECT 1; END
+                    """
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            def sampled(path, seconds):
+                return sample_database(
+                    path,
+                    seconds,
+                    process_scan=ProcessScan(status="ok"),
+                    sleep_fn=lambda _seconds: None,
+                )
+
+            stdout = io.StringIO()
+            with (
+                patch.object(cli, "sample_database", side_effect=sampled),
+                patch("sys.stdout", stdout),
+            ):
+                code = cli.main(
+                    [
+                        "verify",
+                        "--database",
+                        str(database),
+                        "--manifest",
+                        str(manifest_path),
+                        "--sample-seconds",
+                        "0",
+                        "--json",
+                    ]
+                )
+
+            self.assertEqual(code, cli.EXIT_PARTIAL)
+            context = json.loads(stdout.getvalue())["manifest_context"]
+            self.assertFalse(context["base_schema_matches"])
+            self.assertFalse(context["logs_trigger_set_matches"])
+            self.assertFalse(context["exact_trigger_state_matches"])
+            self.assertFalse(context["matches"])
 
 
 if __name__ == "__main__":

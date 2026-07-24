@@ -78,8 +78,10 @@ operator experience, but zero future impact is not established.
 
 Preferred:
 
-> No known diagnostic insert/prune churn was observed during this bounded
+> No diagnostic insert or retained-row change was observed during this bounded
 > 30-second interval while Codex was proven to hold the selected database open.
+
+This statement does not prove Codex stopped executing its pruning query.
 
 Also acceptable:
 

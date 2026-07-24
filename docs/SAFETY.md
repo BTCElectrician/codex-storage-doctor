@@ -15,9 +15,10 @@ Publication and mutation of any real Codex database remain unauthorized.
    mode, replaces a database, or runs `VACUUM`.
 4. No command installs a scheduler, daemon, service, LaunchAgent, cron entry,
    background watcher, or environment variable.
-5. `apply` and `rollback` require an immutable artifact and its exact
-   confirmation token.
-6. Mutation requires every Codex surface closed and process/file-handle
+5. `apply` and `rollback` require a self-digested artifact and its exact
+   confirmation token. Plan/output creation is create-only; the private
+   manifest advances through explicit lifecycle states.
+6. Mutation requires every Codex surface closed and all-process target-handle
    detection to succeed.
 7. Every schema mutation follows a complete, verified SQLite backup.
 8. Only the `logs` table in an explicitly selected database is eligible.
@@ -48,7 +49,8 @@ and tests must not promise an unchanged SHM modification time.
 Allowed inspection is deliberately narrow:
 
 - `sqlite_master` object names and doctor-owned trigger presence;
-- `PRAGMA table_info(logs)` column names and types;
+- fixed, allowlisted `logs` schema capabilities derived from
+  `PRAGMA table_info(logs)`, never arbitrary identifiers or declared types;
 - `PRAGMA quick_check(1)`;
 - aggregate `COUNT(*)`, `MAX(id)`, numeric `estimated_bytes`, and
   `sqlite_sequence.seq`;
@@ -65,7 +67,7 @@ Forbidden:
 - arbitrary trigger SQL;
 - hashes of payloads as a substitute for not reading them;
 - process arguments or environment contents;
-- absolute paths unless `--reveal-paths` is explicit.
+- absolute paths in any report value unless `--reveal-paths` is explicit.
 
 Support reports use report-local sequential database IDs. Output files request
 mode `0600`; restrictive permissions are best-effort on Windows.
@@ -118,12 +120,17 @@ manual because automatic cleanup would violate the preservation boundary.
 The plan also records size and mtime as informational evidence. They are not
 stale-plan identity fields: a live diagnostic database can legitimately gain
 rows after planning. Apply instead captures the current rows in a verified
-backup after Codex is closed, then refuses if the database or WAL changes
-during or after that backup.
+backup after Codex is closed. Its race checks compare main/WAL file identity,
+size, and high-resolution mtime before and after backup and before commit.
+These are stat-bounded guards; they are not a cryptographic proof against every
+same-size in-place change on every filesystem. In particular, a filesystem with
+coarse modification-time resolution can miss a same-size change that occurs
+within one timestamp tick.
 
-If planning observed a Codex version, apply must observe that same version.
-An unavailable apply-time version is a refusal rather than evidence that the
-version is unchanged.
+If planning observed a PATH CLI Codex version, apply must observe that same
+version. An unavailable apply-time version is a refusal rather than evidence
+that the version is unchanged. This is advisory CLI consistency evidence, not
+proof that the selected database's Desktop or IDE writer has the same version.
 
 Writable connections use SQLite URI `mode=rw` after strict path resolution.
 They cannot create a missing target.
@@ -141,7 +148,20 @@ while that connection holds `BEGIN EXCLUSIVE`. The implemented ordering is:
 6. repeat process, file identity, schema fingerprint, trigger-conflict, and
    source-integrity checks;
 7. create the one doctor-owned trigger and commit;
-8. reopen read-only and verify the exact trigger.
+8. reopen read-only and verify the exact trigger;
+9. advance and verify the durable manifest. Any post-commit failure is reported
+   as `mutation_recovery_required` with the prepared manifest path and
+   rollback-token recovery information.
+
+If the `COMMIT` call itself raises, the doctor closes that connection and
+inspects the exact state through an independent read-only connection. A proven
+pre-commit state is a refusal. A proven post-commit state requires recovery. If
+the state cannot be proved, exit 9 says the commit *may* have succeeded and
+does not claim that mutation definitely occurred.
+
+If the durable manifest cannot be validated and the prepared and advanced
+tokens differ, default terminal output preserves every token candidate and
+does not claim which one is authoritative.
 
 Failure before commit leaves the target without a partial doctor trigger. A
 failure after backup may leave a private verified backup for manual retention;
@@ -156,13 +176,17 @@ without printing their potentially private names or SQL.
 Mutation is refused when:
 
 - any Codex Desktop, CLI, or IDE surface appears open;
-- the target is open by a Codex process;
-- process/handle detection errors or is insufficient;
+- the target is open by any visible process, regardless of executable name;
+- all-process target-handle detection errors or is insufficient;
 - a Windows process targets WSL/UNC storage, or WSL targets `/mnt/<drive>`;
 - the target, schema, or plan changed;
 - the schema is unsupported;
 - a conflicting trigger exists;
 - the verified backup or restrictive artifact cannot be created.
+
+Linux and macOS mutation require successful target-directed `lsof` evidence in
+addition to Codex-surface discovery. If `lsof` is missing, errors, or returns
+incomplete evidence, audit remains available but mutation fails closed.
 
 The user runs `apply` and `rollback` from an external terminal after quitting
 Codex. A plan is only a preview; generating one is not approval to apply it.
@@ -183,7 +207,9 @@ upgrading Codex, then re-audit and create a new plan after the upgrade.
 Maximum mode uses an unconditional `BEFORE INSERT` trigger. It suppresses every
 future row in the selected `logs` table, including `WARN` and `ERROR`.
 
-Both modes suppress known SQLite insert/prune churn at that table. Neither mode:
+Both modes suppress the targeted SQLite inserts at that table. Because Codex
+may still execute a pruning statement after an ignored insert, the trigger does
+not prove the prune query or every SQLite transaction stops. Neither mode:
 
 - modifies thread, state, memory, project, or conversation databases;
 - removes existing rows;
@@ -195,7 +221,7 @@ Both modes suppress known SQLite insert/prune churn at that table. Neither mode:
 
 Rollback:
 
-1. requires Codex closed and healthy process detection;
+1. requires Codex closed and healthy all-process target-handle detection;
 2. revalidates target identity and exact installed trigger;
 3. creates and verifies a fresh backup of the current state;
 4. drops only the trigger named and fingerprinted in the manifest.
@@ -203,6 +229,14 @@ Rollback:
 If the exact trigger is already absent and no conflicting doctor trigger
 exists, rollback performs no database mutation but still seals the manifest as
 `rolled_back` so the durable lifecycle record matches the observed state.
+
+If trigger removal commits but verification, connection close, manifest
+advancement, or result writing fails, rollback reports
+`rollback_reconciliation_required` with the manifest, fresh backup, and durable
+token information. Keep Codex closed and repeat the same rollback command; the
+already-absent path verifies ownership/state and reconciles the manifest.
+The same independent state check and conservative exit-9 rule applies when the
+rollback `COMMIT` call raises.
 
 It never restores the older database automatically. An automatic restore could
 overwrite newer diagnostic data or collide with a live WAL. Manual disaster
