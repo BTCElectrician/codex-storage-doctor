@@ -180,7 +180,7 @@ Close with:
 - [x] Skill frontmatter, plugin manifest, marketplace, and isolated local
       install validate.
 - [ ] Hosted Ubuntu/macOS/Windows CI has run after publication.
-- [ ] Fresh-context Sol review has accepted the actual implementation and
+- [x] Fresh-context Sol review has accepted the actual implementation and
       residual risks.
 - [ ] Primary-source statuses and version claims are refreshed immediately
       before publication.

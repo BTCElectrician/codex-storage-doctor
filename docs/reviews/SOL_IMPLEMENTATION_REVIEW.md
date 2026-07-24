@@ -66,3 +66,29 @@ correction set. They were accepted and corrected before asking for a verdict:
 The corrected tree passes 58 isolated tests and rebuilds source-matching wheel
 and zipapp artifacts. These corrections still do not claim acceptance; the
 reviewer's final disposition is pending.
+
+## Final post-fix verdict
+
+**Accepted** as a local release candidate.
+
+The fresh reviewer assessed frozen implementation commit
+`b22c5e9b01e4ab03da1b57a465015ff0b3cdf555`, reran the isolated validation, and
+reported no remaining P0, P1, or P2 findings. The accepted validation included
+58 tests, fresh wheel and zipapp builds, byte-for-byte source-module checks,
+no-index wheel installation, console smoke, compile validation, leak guard,
+distribution/plugin validation, and targeted synthetic lifecycle probes.
+
+The acceptance retains these explicit residual risks:
+
+- native Windows mutation remains intentionally unavailable;
+- Linux and Windows behavior remains fixture/CI-oriented rather than live
+  validation from this macOS run;
+- hosted CI has not run because publication is unauthorized;
+- conservative process-name detection may refuse safe cases;
+- backups may be large and contain private diagnostic data;
+- primary sources require a fresh publication-time check;
+- balanced mode must be rolled back before upgrading Codex.
+
+This review accepts local release-candidate use only. It does not authorize
+publication, pushing, real-database mutation, persistent personal
+installation, or Oracle review.

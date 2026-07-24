@@ -6,10 +6,11 @@ diagnostic-log churn.
 > **Repository status — unpublished local pre-release.** The CLI, tests, skill,
 > plugin, evidence review, and safety model are implemented locally. A first
 > fresh-context implementation review rejected the candidate and its accepted
-> safety findings have been corrected; final post-fix review is still pending.
-> Native Windows mutation remains deliberately unavailable until trustworthy
-> handle evidence can be proven. No package, plugin, or repository has been
-> published.
+> safety findings were corrected. A second fresh-context Sol review accepted
+> the corrected local release candidate with no unresolved P0, P1, or P2
+> findings. Native Windows mutation remains deliberately unavailable until
+> trustworthy handle evidence can be proven. No package, plugin, or repository
+> has been published.
 
 Codex Storage Doctor is designed to answer five questions without reading your
 prompts or diagnostic payloads:

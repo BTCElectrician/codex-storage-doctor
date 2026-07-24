@@ -19,8 +19,8 @@ Last updated: 2026-07-24 (America/Chicago)
   standard-library implementation, so native Windows mutation intentionally
   fails closed. Hosted multi-OS CI has not run because publication is not
   authorized. Linux/Windows behavior is fixture-tested, not live-system tested.
-- **In progress:** a second fresh-context Sol `xhigh` review of the corrected
-  implementation.
+- **Accepted locally:** a second fresh-context Sol `xhigh` review accepted the
+  corrected implementation with no unresolved P0, P1, or P2 findings.
 - **Planned only after operator approval:** GitHub publication, hosted CI,
   package/plugin release, demo recording, screenshot, launch post, and any
   upstream communication.
@@ -32,7 +32,7 @@ Last updated: 2026-07-24 (America/Chicago)
 
 ## Local validation
 
-Latest completed evidence before the post-fix Sol verdict:
+Latest completed evidence:
 
 - 58 synthetic unit/integration tests pass on local macOS. The test runner
   isolates `HOME`, `USERPROFILE`, `CODEX_HOME`, `CODEX_SQLITE_HOME`, and
@@ -44,9 +44,9 @@ Latest completed evidence before the post-fix Sol verdict:
   isolated virtual environment; the console `--version` smoke passed.
 - Current artifact SHA-256 values:
   - zipapp:
-    `94a18063c095785692e132786778cfbb164fb423be1a3d653e9cbd0c520eb9ed`
+    `28a9fc293bcede03e4e9d0bc2b4cc943713b6a777e55145de6b51086260ceddd`
   - wheel:
-    `85401a141a0fb5e14d05e57a803cd0f73655f1b2e8eb82f8f9f7af4f129423c6`
+    `393e437f21dccf800726ed82eae787c3bd3eb18937270c3aa533d0e75a8675ed`
 - Repo marketplace registered and the current plugin installed/enabled under a
   fresh isolated workspace `CODEX_HOME`; the personal Codex home was not
   changed.
@@ -55,8 +55,11 @@ Latest completed evidence before the post-fix Sol verdict:
 - `git diff --check` passed.
 - No real Codex database was mutated.
 
-The post-fix review disposition and exact source commit will be recorded after
-the fresh reviewer returns.
+Fresh Sol accepted implementation commit
+`b22c5e9b01e4ab03da1b57a465015ff0b3cdf555` for local release-candidate use.
+The current artifacts were rebuilt from that unchanged implementation plus
+this recorded review disposition. The verdict does not authorize publication,
+personal installation, or real-database mutation.
 
 ## Development-boundary note
 
@@ -77,6 +80,6 @@ report was removed, the smoke procedure was corrected to isolate `HOME` and
 - Peer challenger: `claude-fable-5` on Claude Code print surface, `high`
 - Initial implementation reviewer: fresh-context `gpt-5.6-sol`, `xhigh`;
   verdict **rejected**, accepted findings corrected locally
-- Post-fix implementation reviewer: pending fresh-context `gpt-5.6-sol`,
-  `xhigh`
+- Post-fix implementation reviewer: fresh-context `gpt-5.6-sol`, `xhigh`;
+  verdict **accepted**, no unresolved P0, P1, or P2 findings
 - Oracle: not invoked
