@@ -122,16 +122,32 @@ class DistributionTests(unittest.TestCase):
             "Git is required to verify ignore behavior",
         )
         completed = subprocess.run(
-            [str(git_executable), "check-ignore", "--no-index", "--stdin"],
+            [
+                str(git_executable),
+                "check-ignore",
+                "--no-index",
+                "-z",
+                "--stdin",
+            ],
             cwd=root,
-            input="\n".join(representative_paths) + "\n",
-            text=True,
+            input=(
+                b"\0".join(os.fsencode(path) for path in representative_paths)
+                + b"\0"
+            ),
             capture_output=True,
             check=False,
         )
-        self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(
-            set(completed.stdout.splitlines()),
+            completed.returncode,
+            0,
+            os.fsdecode(completed.stderr),
+        )
+        self.assertEqual(
+            {
+                os.fsdecode(path)
+                for path in completed.stdout.split(b"\0")
+                if path
+            },
             set(representative_paths),
         )
 

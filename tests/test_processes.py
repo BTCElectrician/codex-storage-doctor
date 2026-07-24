@@ -159,9 +159,16 @@ class ProcessAdapterTests(unittest.TestCase):
             process = root / "proc" / "42"
             process.mkdir(parents=True)
             real_stat = Path.stat
+            denial_count = 0
 
             def fail_pid_stat(path, *args, **kwargs):
-                if path.name == "42" and path.parent.name == "proc":
+                nonlocal denial_count
+                if (
+                    denial_count == 0
+                    and path.name == "42"
+                    and path.parent.name == "proc"
+                ):
+                    denial_count += 1
                     raise PermissionError("synthetic stat denial")
                 return real_stat(path, *args, **kwargs)
 
@@ -173,13 +180,21 @@ class ProcessAdapterTests(unittest.TestCase):
                     stderr="",
                 )
 
-            with patch.object(Path, "stat", fail_pid_stat):
+            with (
+                patch.object(Path, "stat", fail_pid_stat),
+                patch(
+                    "codex_storage_doctor.processes.os.geteuid",
+                    create=True,
+                    return_value=0,
+                ),
+            ):
                 result = scan_codex_processes(
                     (database,),
                     platform_name="linux",
                     proc_root=root / "proc",
                     runner=runner,
                 )
+            self.assertEqual(denial_count, 1)
             self.assertEqual(result.status, "partial")
             self.assertFalse(result.handle_evidence_supported)
 
