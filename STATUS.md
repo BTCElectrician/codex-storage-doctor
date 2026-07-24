@@ -17,15 +17,16 @@ Last updated: 2026-07-24 (America/Chicago)
   both Windows/WSL cross-boundary refusals.
 - **Partial:** native Windows open-handle evidence is unavailable with the
   standard-library implementation, so native Windows mutation intentionally
-  fails closed. Hosted multi-OS CI has not run because publication is not
-  authorized. Linux/Windows behavior is fixture-tested, not live-system tested.
+  fails closed. Linux/Windows behavior is fixture-tested on native hosted
+  runners, not validated against a real Codex installation.
 - **Accepted locally:** a second fresh-context Sol `xhigh` review accepted the
   corrected implementation with no unresolved P0, P1, or P2 findings.
-- **Planned only after operator approval:** GitHub publication, hosted CI,
-  package/plugin release, demo recording, screenshot, launch post, and any
-  upstream communication.
+- **Published:** public GitHub source repository with `main` as the default
+  branch; the corrected hosted matrix passes.
+- **Planned only after operator approval:** package/plugin release, demo
+  recording, screenshot, launch post, and any upstream communication.
 - **Blocked:** no implementation blocker.
-- **Not authorized / not done:** push, publication, external accounts or
+- **Not authorized / not done:** package or plugin release, public launch
   communication, persistent personal install, real Codex database mutation,
   deletion, `VACUUM`, sidecar removal, environment or journal-mode changes,
   background jobs, or Oracle review.
@@ -34,7 +35,7 @@ Last updated: 2026-07-24 (America/Chicago)
 
 Latest completed evidence:
 
-- 58 synthetic unit/integration tests pass on local macOS. The test runner
+- 59 synthetic unit/integration tests pass on local macOS. The test runner
   isolates `HOME`, `USERPROFILE`, `CODEX_HOME`, `CODEX_SQLITE_HOME`, and
   executable lookup from the operator's Codex installation.
 - Post-fix `make check` passed: isolated tests, fresh-staged wheel and zipapp
@@ -44,9 +45,12 @@ Latest completed evidence:
   isolated virtual environment; the console `--version` smoke passed.
 - Current artifact SHA-256 values:
   - zipapp:
-    `28a9fc293bcede03e4e9d0bc2b4cc943713b6a777e55145de6b51086260ceddd`
+    `31723906473307601c0f0f9e67cf9b1321883d93fd73991f6da52665f5579b3e`
   - wheel:
-    `393e437f21dccf800726ed82eae787c3bd3eb18937270c3aa533d0e75a8675ed`
+    `d3f6a869ac6d5142428f8858804103149de070a0c48e72a5afff7d8ae5b368f2`
+- Hosted CI run `30112221812` passed all six macOS, Ubuntu, and Windows jobs
+  on Python 3.11 and 3.14, including tests, packaging, artifact verification,
+  and install smokes.
 - Repo marketplace registered and the current plugin installed/enabled under a
   fresh isolated workspace `CODEX_HOME`; the personal Codex home was not
   changed.
@@ -57,9 +61,10 @@ Latest completed evidence:
 
 Fresh Sol accepted implementation commit
 `b22c5e9b01e4ab03da1b57a465015ff0b3cdf555` for local release-candidate use.
-The current artifacts were rebuilt from that unchanged implementation plus
-this recorded review disposition. The verdict does not authorize publication,
-personal installation, or real-database mutation.
+The later hosted correction was independently reviewed and accepted before
+push. The operator separately authorized public repository creation and
+`origin/main` publication. Package/plugin releases, personal installation, and
+real-database mutation remain unauthorized.
 
 ## Development-boundary note
 

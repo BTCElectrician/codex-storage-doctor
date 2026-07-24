@@ -179,13 +179,14 @@ Close with:
       binding, and create-only output regressions pass on synthetic data.
 - [x] Skill frontmatter, plugin manifest, marketplace, and isolated local
       install validate.
-- [ ] Hosted Ubuntu/macOS/Windows CI has run after publication.
+- [x] Hosted Ubuntu/macOS/Windows CI passes after publication.
 - [x] Fresh-context Sol review has accepted the actual implementation and
       residual risks.
 - [ ] Primary-source statuses and version claims are refreshed immediately
-      before publication.
-- [ ] Operator explicitly authorizes repository publication, package/plugin
-      release, and public launch assets.
+      before any package/plugin release or launch communication.
+- [x] Operator explicitly authorized public repository publication.
+- [ ] Operator explicitly authorizes package/plugin release and public launch
+      assets.
 
 Suggested launch assets after authorization:
 

@@ -35,7 +35,8 @@ No real Codex data was inspected or changed during the review.
 
 - Native Windows mutation remains unavailable because standard-library
   open-handle evidence is partial.
-- Hosted Linux/macOS/Windows CI cannot run before publication.
+- At initial review time, hosted Linux/macOS/Windows CI could not run before
+  publication.
 - Linux and Windows behavior is fixture-tested, not live-system validated in
   this local run.
 - Process identification remains intentionally conservative and basename-led.
@@ -83,7 +84,7 @@ The acceptance retains these explicit residual risks:
 - native Windows mutation remains intentionally unavailable;
 - Linux and Windows behavior remains fixture/CI-oriented rather than live
   validation from this macOS run;
-- hosted CI has not run because publication is unauthorized;
+- at final local review time, hosted CI had not yet run;
 - conservative process-name detection may refuse safe cases;
 - backups may be large and contain private diagnostic data;
 - primary sources require a fresh publication-time check;
@@ -92,3 +93,18 @@ The acceptance retains these explicit residual risks:
 This review accepts local release-candidate use only. It does not authorize
 publication, pushing, real-database mutation, persistent personal
 installation, or Oracle review.
+
+## Operator-authorized publication follow-up
+
+The operator later authorized public repository creation and an `origin/main`
+push. The initial hosted run exposed Windows SQLite handle-lifecycle and
+fresh-runner packaging gaps. A reviewed correction added deterministic
+connection closure, host-independent fixture behavior, build prerequisites,
+and a regression for connection disposal.
+
+Local validation then passed 59 tests. Hosted run `30112221812` passed the full
+macOS, Ubuntu, and Windows matrix on Python 3.11 and 3.14, including tests,
+wheel and zipapp builds, packaged-source verification, and install smokes.
+This follow-up does not authorize package/plugin releases, public launch
+communication, personal installation, real-database mutation, or Oracle
+review.

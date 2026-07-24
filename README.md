@@ -3,14 +3,16 @@
 Preservation-first diagnosis and reversible mitigation for Codex SQLite
 diagnostic-log churn.
 
-> **Repository status — unpublished local pre-release.** The CLI, tests, skill,
-> plugin, evidence review, and safety model are implemented locally. A first
+> **Repository status — public source pre-release.** The CLI, tests, skill,
+> plugin, evidence review, and safety model are implemented. A first
 > fresh-context implementation review rejected the candidate and its accepted
 > safety findings were corrected. A second fresh-context Sol review accepted
-> the corrected local release candidate with no unresolved P0, P1, or P2
-> findings. Native Windows mutation remains deliberately unavailable until
-> trustworthy handle evidence can be proven. No package, plugin, or repository
-> has been published.
+> the corrected candidate with no unresolved P0, P1, or P2 findings. The
+> initial public CI run then exposed and drove correction of Windows SQLite
+> handle-lifecycle and fresh-runner packaging gaps; the corrected six-job
+> macOS/Ubuntu/Windows matrix passes. Native Windows mutation remains
+> deliberately unavailable until trustworthy handle evidence can be proven.
+> No package-index release, binary release, or public plugin listing is claimed.
 
 Codex Storage Doctor is designed to answer five questions without reading your
 prompts or diagnostic payloads:
@@ -262,7 +264,8 @@ As of 2026-07-24:
 | Native Windows mutation | **Not implemented** | Fails closed until dependable handle evidence and real Windows validation exist |
 | WSL discovery | **Implemented with fixtures** | Native-side operation supported by design; cross-boundary mutation is refused |
 | Skill and minimal plugin | **Implemented locally** | Schema/layout validation passes; separately installed CLI remains required |
-| Publication, package release, public plugin listing | **Not authorized / not done** | No public URL, release, or install count is claimed |
+| Source repository | **Public** | `BTCElectrician/codex-storage-doctor`; `main` is the default branch |
+| Package release, binary release, public plugin listing | **Not authorized / not done** | No release or install count is claimed |
 
 See `STATUS.md` for the current handoff truth and exact validation record.
 
