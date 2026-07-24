@@ -1,0 +1,7 @@
+interface:
+  display_name: "Codex Storage Doctor"
+  short_description: "Safely diagnose Codex SQLite log churn"
+  default_prompt: "Use $codex-storage-doctor to audit Codex diagnostic-log storage safely."
+
+policy:
+  allow_implicit_invocation: true

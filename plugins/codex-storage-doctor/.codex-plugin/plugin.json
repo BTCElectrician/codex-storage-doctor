@@ -1,0 +1,24 @@
+{
+  "name": "codex-storage-doctor",
+  "version": "0.1.0",
+  "description": "Preservation-first diagnosis and reversible mitigation for Codex SQLite diagnostic-log churn.",
+  "author": {
+    "name": "Collin"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["codex", "sqlite", "diagnostics", "storage", "privacy"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Codex Storage Doctor",
+    "shortDescription": "Safely diagnose Codex SQLite log churn",
+    "longDescription": "Audit Codex diagnostic databases, identify active versus stale copies, prepare reversible mitigation, and verify bounded results without exposing private payloads.",
+    "developerName": "Collin",
+    "category": "Developer Tools",
+    "capabilities": ["Read", "Write"],
+    "defaultPrompt": [
+      "Audit my Codex diagnostic-log storage safely.",
+      "Plan a reversible balanced mitigation.",
+      "Verify a Codex Storage Doctor mitigation."
+    ]
+  }
+}

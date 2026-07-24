@@ -1,0 +1,5 @@
+CREATE TABLE logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts INTEGER NOT NULL,
+    opaque_payload TEXT
+);

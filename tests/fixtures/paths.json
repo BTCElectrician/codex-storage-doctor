@@ -1,0 +1,18 @@
+{
+  "macos": [
+    "/Users/example/.codex/logs_2.sqlite",
+    "/Volumes/Work/codex-sqlite/logs_2.sqlite"
+  ],
+  "linux": [
+    "/home/example/.codex/logs_2.sqlite",
+    "/srv/codex-state/logs_2.sqlite"
+  ],
+  "windows": [
+    "C:\\Users\\Example\\.codex\\logs_2.sqlite",
+    "\\\\wsl.localhost\\Ubuntu\\home\\example\\.codex\\logs_2.sqlite"
+  ],
+  "wsl": [
+    "/home/example/.codex/logs_2.sqlite",
+    "/mnt/c/Users/Example/.codex/logs_2.sqlite"
+  ]
+}
