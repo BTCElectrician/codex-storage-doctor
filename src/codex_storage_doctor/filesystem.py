@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import os
-from pathlib import Path, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import platform
 import subprocess
 from typing import Callable
@@ -109,7 +109,7 @@ def _darwin_filesystem_type(path: Path, runner: Runner) -> str | None:
         return None
     if result.returncode != 0:
         return None
-    target = path.resolve(strict=False)
+    target = PurePosixPath(path.as_posix())
     matches: list[tuple[int, str]] = []
     for line in result.stdout.splitlines():
         prefix, separator, options = line.rpartition(" (")
@@ -118,7 +118,7 @@ def _darwin_filesystem_type(path: Path, runner: Runner) -> str | None:
         _device, on_separator, mount_value = prefix.partition(" on ")
         if not on_separator:
             continue
-        mount_point = Path(mount_value)
+        mount_point = PurePosixPath(mount_value)
         try:
             target.relative_to(mount_point)
         except ValueError:

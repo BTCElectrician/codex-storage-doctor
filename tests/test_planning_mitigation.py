@@ -27,6 +27,7 @@ from codex_storage_doctor.planning import (
     calculate_plan_digest,
     create_plan,
     cross_boundary_reason,
+    read_only_connection,
     validate_plan_document,
 )
 from codex_storage_doctor.reports import read_json_object, write_private_json
@@ -66,6 +67,17 @@ class PlanningTests(unittest.TestCase):
             incompatible.rename(root / "state_5.sqlite")
             with self.assertRaises(PlanError):
                 create_plan(root / "state_5.sqlite", "maximum")
+
+    def test_read_only_connection_closes_after_context(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = create_database(Path(directory))
+            with read_only_connection(database) as connection:
+                self.assertEqual(
+                    connection.execute("PRAGMA query_only").fetchone(),
+                    (1,),
+                )
+            with self.assertRaises(sqlite3.ProgrammingError):
+                connection.execute("SELECT 1")
 
     def test_cross_boundary_detection(self) -> None:
         self.assertIsNotNone(

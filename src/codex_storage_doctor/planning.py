@@ -9,10 +9,11 @@ import platform
 import re
 import sqlite3
 import subprocess
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 
 from . import __version__
 from .filesystem import nonlocal_filesystem_reason
@@ -101,11 +102,15 @@ def read_file_identity(path: Path) -> FileIdentity:
     )
 
 
-def read_only_connection(path: Path) -> sqlite3.Connection:
+@contextmanager
+def read_only_connection(path: Path) -> Iterator[sqlite3.Connection]:
     uri = f"{path.resolve().as_uri()}?mode=ro"
     connection = sqlite3.connect(uri, uri=True, timeout=2.0)
-    connection.execute("PRAGMA query_only=ON")
-    return connection
+    try:
+        connection.execute("PRAGMA query_only=ON")
+        yield connection
+    finally:
+        connection.close()
 
 
 def schema_fingerprint_connection(connection: sqlite3.Connection) -> str:

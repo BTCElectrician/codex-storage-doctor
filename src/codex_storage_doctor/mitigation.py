@@ -180,14 +180,13 @@ def _backup_database(
     temporary = destination.with_suffix(destination.suffix + ".tmp")
     if destination.exists() or temporary.exists():
         raise SafetyGateError("refusing to overwrite an existing backup artifact")
-    source = read_only_connection(database)
     backup = sqlite3.connect(temporary)
     try:
-        source.backup(backup)
+        with read_only_connection(database) as source:
+            source.backup(backup)
         _quick_check(backup, "backup")
     except BaseException:
         backup.close()
-        source.close()
         try:
             temporary.unlink()
         except OSError:
@@ -195,7 +194,6 @@ def _backup_database(
         raise
     else:
         backup.close()
-        source.close()
     _restrict(temporary, 0o600)
     temporary.replace(destination)
     _restrict(destination, 0o600)

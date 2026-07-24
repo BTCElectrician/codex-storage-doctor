@@ -5,9 +5,11 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from codex_storage_doctor.config import ConfigReadError, load_config_sqlite_homes
 from codex_storage_doctor.paths import (
+    _wsl_windows_home,
     classify_candidate_activity,
     discover_candidates,
     is_cross_boundary_path,
@@ -189,14 +191,27 @@ sqlite_home = "configured-alpha"
 
             wsl_windows_home = root / "mounted-windows-user"
             wsl_database = touch_database(wsl_windows_home / ".codex")
-            wsl = discover_candidates(
-                environ={
-                    "WSL_DISTRO_NAME": "Ubuntu",
-                    "USERPROFILE": str(wsl_windows_home),
-                },
-                home=root / "linux-user",
-                platform_name="linux",
+            mapped_home = _wsl_windows_home(
+                {"USERPROFILE": r"C:\Users\synthetic"}
             )
+            self.assertIsNotNone(mapped_home)
+            assert mapped_home is not None
+            self.assertEqual(
+                mapped_home.as_posix(),
+                "/mnt/c/Users/synthetic",
+            )
+            with patch(
+                "codex_storage_doctor.paths._wsl_windows_home",
+                return_value=wsl_windows_home,
+            ):
+                wsl = discover_candidates(
+                    environ={
+                        "WSL_DISTRO_NAME": "Ubuntu",
+                        "USERPROFILE": r"C:\Users\synthetic",
+                    },
+                    home=root / "linux-user",
+                    platform_name="linux",
+                )
             self.assertEqual([candidate.path for candidate in wsl], [wsl_database])
             self.assertEqual(
                 wsl[0].sources,
