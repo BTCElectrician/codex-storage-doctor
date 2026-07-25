@@ -174,6 +174,14 @@ class DistributionTests(unittest.TestCase):
 
     def test_current_public_safety_claims_are_bounded(self) -> None:
         root = Path(__file__).resolve().parents[1]
+        readme = (root / "README.md").read_text(encoding="utf-8")
+        security = (root / "SECURITY.md").read_text(encoding="utf-8")
+        status = (root / "STATUS.md").read_text(encoding="utf-8")
+        self.assertNotIn("public source pre-release", readme)
+        self.assertNotIn("98 passing synthetic regressions", readme)
+        self.assertIn("v0.1.1", readme)
+        self.assertIn("v0.1.1", security)
+        self.assertIn("v0.1.1", status)
         active_paths = (
             root / "README.md",
             root / "SECURITY.md",

@@ -14,6 +14,7 @@ from codex_storage_doctor.paths import (
     discover_candidates,
     is_cross_boundary_path,
 )
+from helpers import decode_json
 
 
 def touch_database(root: Path, name: str = "logs_2.sqlite") -> Path:
@@ -32,7 +33,7 @@ class ConfigAndPathTests(unittest.TestCase):
                 """
 profile = "zeta"
 sqlite_home = "top"
-unrelated_secret = "DO-NOT-RETURN"
+unrelated_private_value = "DO-NOT-RETURN"
 
 [profiles.zeta]
 sqlite_home = "zeta"
@@ -149,7 +150,7 @@ sqlite_home = "configured-alpha"
             self.assertFalse(candidates[1].known_filename)
 
     def test_cross_boundary_paths_are_classified_without_disk_access(self) -> None:
-        fixture = json.loads(
+        fixture = decode_json(
             (Path(__file__).parent / "fixtures" / "paths.json").read_text(
                 encoding="utf-8"
             )

@@ -84,9 +84,11 @@ def write_private_json(
 def read_json_object(path: Path) -> dict[str, Any]:
     try:
         with path.expanduser().open("r", encoding="utf-8") as handle:
-            value = json.load(handle)
+            value = json.JSONDecoder().decode(handle.read())
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
-        raise ArtifactReadError(f"cannot read JSON artifact: {error}") from error
+        raise ArtifactReadError(
+            "the requested JSON artifact could not be read safely"
+        ) from error
     if not isinstance(value, dict):
         raise ArtifactReadError("expected a JSON object artifact")
     return value

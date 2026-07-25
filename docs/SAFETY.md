@@ -4,8 +4,10 @@ Codex Storage Doctor is preservation-first. Its default operation is diagnosis,
 and its optional mutation is limited to one namespaced trigger on one
 explicitly selected Codex diagnostic database.
 
-Status: implemented and regression-tested locally against synthetic data.
-Publication and mutation of any real Codex database remain unauthorized.
+Status: implemented, regression-tested with synthetic data, and published as
+GitHub release `v0.1.1`. This safety record does not itself authorize mutation
+of any real Codex database: the database owner must separately review the
+audit, exact plan, backup location, confirmation token, and rollback path.
 
 ## Non-negotiable invariants
 
@@ -83,6 +85,11 @@ The artifact root is:
 ```text
 <sqlite_home>/.codex-storage-doctor/rollback/<UTC timestamp>-<plan id>/
 ```
+
+That root is derived again from the resolved database during apply and
+rollback. Self-digests are tamper evidence, not authenticity signatures, so
+the mutation paths do not trust a plan or manifest to nominate an unrelated
+directory.
 
 The tool requires `0700` artifact directories and `0600` artifact files on
 POSIX; Windows permissions are best-effort. Before changing a trigger, the
@@ -269,6 +276,10 @@ Verification reports:
   database open during the sample;
 - logical row/high-water/file deltas during the stated interval;
 - process-I/O deltas when the platform safely exposes them.
+
+Full verification requires the rollback manifest. Without `--manifest`, the
+command remains a read-only observation but marks the result partial and does
+not claim that the database, mode, or trigger lifecycle matched an apply.
 
 An idle stable sample does not demonstrate suppression. An active stable sample
 supports only the bounded statement that no known logical change was observed

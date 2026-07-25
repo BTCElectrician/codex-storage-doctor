@@ -632,7 +632,11 @@ def _scan_windows(
             ),
         )
     try:
-        payload = json.loads(result.stdout) if result.stdout.strip() else []
+        payload = (
+            json.JSONDecoder().decode(result.stdout)
+            if result.stdout.strip()
+            else []
+        )
     except json.JSONDecodeError:
         payload = None
     if payload is None:

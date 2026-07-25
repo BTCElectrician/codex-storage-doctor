@@ -19,6 +19,7 @@ from codex_storage_doctor.mitigation import (
     RollbackReconciliationRequired,
     SafetyGateError,
     _connect_writable,
+    _seal_manifest,
     apply_plan,
     rollback,
     validate_manifest,
@@ -61,6 +62,59 @@ class PlanningTests(unittest.TestCase):
             changed["mode"] = "maximum"
             with self.assertRaises(PlanError):
                 validate_plan_document(changed)
+
+    def test_resealed_plan_cannot_redirect_target_or_artifact_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = create_database(root)
+            plan = create_plan(database, "balanced")
+            victim = root / "existing-private-directory"
+            victim.mkdir(mode=0o755)
+            original_mode = victim.stat().st_mode & 0o777
+
+            redirected = dict(plan)
+            redirected["artifact_root"] = str(victim)
+            digest = calculate_plan_digest(redirected)
+            redirected["plan_digest"] = digest
+            redirected["confirmation_token"] = f"APPLY-{digest[:12].upper()}"
+
+            with self.assertRaisesRegex(SafetyGateError, "artifact root"):
+                apply_plan(
+                    redirected,
+                    redirected["confirmation_token"],
+                    process_scanner=clear_process_scan,
+                )
+            self.assertEqual(victim.stat().st_mode & 0o777, original_mode)
+            self.assertEqual(tuple(victim.iterdir()), ())
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = create_database(root)
+            plan = create_plan(database, "maximum")
+            renamed = database.with_name("state_5.sqlite")
+            database.rename(renamed)
+
+            redirected = dict(plan)
+            redirected["database"] = str(renamed)
+            redirected["database_name"] = renamed.name
+            redirected["artifact_root"] = str(
+                renamed.parent / ".codex-storage-doctor" / "rollback"
+            )
+            digest = calculate_plan_digest(redirected)
+            redirected["plan_digest"] = digest
+            redirected["confirmation_token"] = f"APPLY-{digest[:12].upper()}"
+
+            with self.assertRaisesRegex(SafetyGateError, "database target"):
+                apply_plan(
+                    redirected,
+                    redirected["confirmation_token"],
+                    process_scanner=clear_process_scan,
+                )
+            with sqlite3.connect(renamed) as connection:
+                trigger_count = connection.execute(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger'"
+                ).fetchone()[0]
+            self.assertEqual(trigger_count, 0)
 
     def test_plan_refuses_non_log_and_incompatible_schema(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -435,6 +489,55 @@ class MitigationTests(unittest.TestCase):
             manifest["status"] = "rolled_back"
             with self.assertRaisesRegex(SafetyGateError, "digest mismatch"):
                 validate_manifest(manifest)
+
+    def test_resealed_manifest_cannot_redirect_rollback_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = create_database(root)
+            plan = create_plan(database, "balanced")
+            applied = apply_plan(
+                plan,
+                plan["confirmation_token"],
+                process_scanner=clear_process_scan,
+            )
+            manifest_path = Path(applied["manifest"])
+            manifest = read_json_object(manifest_path)
+            victim = root / "existing-private-directory"
+            victim.mkdir(mode=0o755)
+            original_mode = victim.stat().st_mode & 0o777
+
+            redirected = dict(manifest)
+            redirected["backup_path"] = str(
+                victim / "logs-before-apply.sqlite"
+            )
+            _seal_manifest(redirected)
+
+            with self.assertRaisesRegex(
+                SafetyGateError,
+                "rollback artifact",
+            ):
+                rollback(
+                    redirected,
+                    redirected["rollback_token"],
+                    process_scanner=clear_process_scan,
+                    manifest_path=manifest_path,
+                )
+            self.assertEqual(victim.stat().st_mode & 0o777, original_mode)
+            self.assertEqual(tuple(victim.iterdir()), ())
+            with sqlite3.connect(database) as connection:
+                trigger_count = connection.execute(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger'"
+                ).fetchone()[0]
+            self.assertEqual(trigger_count, 1)
+
+            missing_backup_path = dict(manifest)
+            missing_backup_path.pop("backup_path")
+            _seal_manifest(missing_backup_path)
+            with self.assertRaisesRegex(
+                SafetyGateError,
+                "backup path",
+            ):
+                validate_manifest(missing_backup_path)
 
     def test_post_commit_manifest_failure_surfaces_durable_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -6,10 +6,10 @@ backup behavior, and bypasses of mutation gates are security issues.
 
 ## Supported versions
 
-This is a public source alpha. There is no package-index, binary, or public
-plugin release and no long-term support promise. Security fixes are evaluated
-against the current `main` development line until a versioned support policy is
-published.
+This is a public alpha. GitHub release `v0.1.1` and the current `main`
+development line receive safety fixes; older release assets are unsupported.
+There is no package-index or public plugin release and no long-term support
+promise. Verify the GitHub release checksums before using an asset.
 
 ## Reporting a vulnerability
 

@@ -1,9 +1,19 @@
 from __future__ import annotations
 
+import json
 import sqlite3
+from typing import Any
 from pathlib import Path
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def decode_json(value: str) -> Any:
+    return json.JSONDecoder().decode(value)
+
+
+def synthetic_rollback_token(state: str) -> str:
+    return "-".join(("ROLLBACK", state))
 
 
 def create_database(root: Path, schema: str = "logs_v2.sql") -> Path:

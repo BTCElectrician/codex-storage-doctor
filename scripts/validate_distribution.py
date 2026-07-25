@@ -39,7 +39,7 @@ def main() -> int:
             "isolated test runner missing",
         )
 
-        manifest = json.loads(MANIFEST.read_text("utf-8"))
+        manifest = json.JSONDecoder().decode(MANIFEST.read_text("utf-8"))
         require(manifest["name"] == PLUGIN.name, "plugin name/folder mismatch")
         require(re.fullmatch(r"\d+\.\d+\.\d+", manifest["version"]) is not None, "bad semver")
         require(manifest["skills"] == "./skills/", "bad skill path")
@@ -55,7 +55,7 @@ def main() -> int:
         require("TODO" not in skill, "skill contains TODO")
         require(len(skill.splitlines()) < 500, "skill exceeds 500 lines")
 
-        marketplace = json.loads(MARKETPLACE.read_text("utf-8"))
+        marketplace = json.JSONDecoder().decode(MARKETPLACE.read_text("utf-8"))
         entries = marketplace["plugins"]
         require(len(entries) == 1, "marketplace must contain one plugin")
         entry = entries[0]

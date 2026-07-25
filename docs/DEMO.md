@@ -1,7 +1,8 @@
 # 90-second synthetic demo
 
-Status: commands and fixture helper are implemented. The recording and public
-launch remain unauthorized and have not been created.
+Status: commands and fixture helper are implemented, and GitHub release
+`v0.1.1` is public. No demo recording, screenshot, external social post,
+public plugin listing, or upstream communication is claimed.
 
 The demo never points at a real Codex home or diagnostic database. The first
 half uses the public CLI; the mutation sequence is recorded from an external
@@ -181,14 +182,15 @@ Close with:
       synthetic data.
 - [x] Skill frontmatter, plugin manifest, marketplace, and isolated local
       install validate.
-- [ ] Hosted Ubuntu/macOS/Windows CI passes on the safety-hardening commit.
-- [ ] Fresh-context adversarial review has accepted the actual corrected
+- [x] Hosted Ubuntu/macOS/Windows CI passes on the safety-hardening commit.
+- [x] Fresh-context adversarial review has accepted the actual corrected
       implementation and residual risks.
-- [ ] Primary-source statuses and version claims are refreshed immediately
+- [x] Primary-source statuses and version claims are refreshed immediately
       before any package/plugin release or launch communication.
 - [x] Operator explicitly authorized public repository publication.
-- [ ] Operator explicitly authorizes package/plugin release and public launch
-      assets.
+- [x] Operator explicitly authorized the GitHub wheel/zipapp release.
+- [ ] Operator explicitly authorizes a public plugin listing and external
+      launch assets.
 
 Suggested launch assets after authorization:
 
@@ -198,4 +200,5 @@ Suggested launch assets after authorization:
    claim, and primary-source link;
 4. one upstream/support-ready synthetic report example.
 
-None of those public assets have been created or published.
+The GitHub release notes are public. The recording, screenshot, external
+social post, and upstream/support example have not been published.

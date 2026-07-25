@@ -8,7 +8,18 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SKIP_DIRS = {".git", "build", "dist", "work", "outputs", "__pycache__"}
+SKIP_DIRS = {
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    "build",
+    "dist",
+    "work",
+    "outputs",
+    "__pycache__",
+}
 SKIP_SUFFIXES = {
     ".pyc",
     ".sqlite",

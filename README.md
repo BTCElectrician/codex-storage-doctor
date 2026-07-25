@@ -3,15 +3,13 @@
 Preservation-first diagnosis and reversible mitigation for Codex SQLite
 diagnostic-log churn.
 
-> **Repository status — public source pre-release.** The CLI, tests, skill,
-> plugin, evidence review, and safety model are implemented. A fresh
-> independent adversarial review rejected the later 82-test local candidate
-> for seven P1 safety classes. Those findings now have a local correction set
-> and 98 passing synthetic regressions, but require another fresh
-> post-fix review before the mutation workflow is recommended.
-> Native Windows mutation remains
-> deliberately unavailable until trustworthy handle evidence can be proven. No
-> package-index release, binary release, or public plugin listing is claimed.
+> **Repository status — public alpha.** Release
+> [v0.1.1](https://github.com/BTCElectrician/codex-storage-doctor/releases/tag/v0.1.1)
+> contains the reviewed source, standalone zipapp, wheel, and SHA-256
+> checksums. The current safety gate has 108 isolated synthetic tests plus
+> hosted macOS, Linux, and Windows packaging checks. Native Windows mutation
+> remains deliberately unavailable until trustworthy handle evidence can be
+> proven. No package-index or public plugin listing is claimed.
 
 Codex Storage Doctor is designed to answer five questions without reading your
 prompts or diagnostic payloads:
@@ -50,8 +48,8 @@ See [the source ledger](docs/EVIDENCE.md) for the evidence and
 
 ## Quick start
 
-These source-checkout instructions are the current alpha path. No package-index
-release, binary release, or public plugin listing is claimed.
+Use the reviewed GitHub release assets or a pinned source checkout. There is no
+package-index or public plugin listing.
 
 ```bash
 python3 -m venv .venv
@@ -121,6 +119,11 @@ detection fails, the schema or file identity changed, a trigger conflicts, the
 plan is stale, the target/artifact filesystem is not verified local, or a
 verified backup cannot be created. Writable SQLite opens use `mode=rw`, so a
 disappearing or mistyped target cannot become a new empty database.
+
+Apply also derives the only permitted private backup root from the resolved
+database path. A resealed or hand-written plan cannot redirect backups or
+permission changes to another directory. Rollback independently binds the
+manifest and its artifact directory to that same database-owned root.
 
 Plan identity binds the resolved path plus device/inode when the OS exposes
 them. Recorded size and mtime are informational: diagnostic rows may normally
@@ -203,7 +206,7 @@ boundary.
 | `audit` | None | Discover, inspect, classify, and optionally sample candidates |
 | `plan --database … --mode …` | None | Create an exact, fingerprinted change preview and confirmation token |
 | `apply --plan … --confirm …` | Trigger only, after gates and backup | Install one namespaced balanced or maximum trigger |
-| `verify --database … --manifest … --sample-seconds …` | None | Verify exact trigger SQL and bind the observed state to its manifest/database |
+| `verify --database … --manifest … --sample-seconds …` | None | Verify exact trigger SQL and bind the observed state to its manifest/database; omitting the manifest is explicitly partial |
 | `rollback --manifest … --confirm …` | Trigger only, after gates and new backup | Drop only the exact doctor-owned trigger |
 
 Exit codes are stable in the frozen contract:
@@ -226,6 +229,18 @@ installed interface.
 ## Installation and packaging
 
 Runtime target: Python 3.11+ with no third-party runtime dependencies.
+
+The recommended distribution is the hash-verified GitHub release bundle:
+
+- `codex-storage-doctor.pyz`
+- `codex_storage_doctor-0.1.1-py3-none-any.whl`
+- `SHA256SUMS.txt`
+
+Download all three from the
+[v0.1.1 release](https://github.com/BTCElectrician/codex-storage-doctor/releases/tag/v0.1.1)
+and verify the asset hashes before installation or execution. GitHub release
+hashes establish byte integrity for that download; they are not a maintainer
+signature or package-index attestation.
 
 From a source checkout:
 
@@ -272,7 +287,8 @@ As of 2026-07-24:
 | WSL discovery | **Implemented with fixtures** | Native-side operation supported by design; cross-boundary mutation is refused |
 | Skill and minimal plugin | **Implemented locally** | Schema/layout validation passes; separately installed CLI remains required |
 | Source repository | **Public** | `BTCElectrician/codex-storage-doctor`; `main` is the default branch |
-| Package release, binary release, public plugin listing | **Not authorized / not done** | No release or install count is claimed |
+| GitHub release | **Published** | `v0.1.1` source, wheel, zipapp, and SHA-256 checksums |
+| Package index and public plugin listing | **Not published** | Install only from a reviewed GitHub release or pinned source |
 
 See `STATUS.md` for the current handoff truth and exact validation record.
 
@@ -287,7 +303,7 @@ See `STATUS.md` for the current handoff truth and exact validation record.
   a missing or failing `lsof` leaves audit available and refuses mutation.
 - Mutation is limited to recognized local filesystem types; remote, unknown,
   and cross-boundary paths remain audit-only.
-- Native Windows mutation is unavailable in `0.1.0`; run read-only audit there
+- Native Windows mutation is unavailable in `0.1.1`; run read-only audit there
   and do not infer open-database handle evidence from process presence.
 - Large databases skip expensive full-table aggregates by default.
 - Backups may be large and contain private diagnostic payloads.

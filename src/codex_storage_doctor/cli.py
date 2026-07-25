@@ -192,7 +192,10 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument(
         "--manifest",
         type=_path,
-        help="rollback manifest used to compare the planned Codex version",
+        help=(
+            "rollback manifest required for full database, mode, trigger, and "
+            "version binding; omission returns a partial result"
+        ),
     )
     _json_arguments(verify)
 
@@ -650,7 +653,12 @@ def _verify_text(result: Mapping[str, Any]) -> str:
             "planned Codex version."
         )
     manifest_context = result["manifest_context"]
-    if manifest_context["provided"] and not manifest_context["matches"]:
+    if not manifest_context["provided"]:
+        lines.append(
+            "Partial: no rollback manifest was supplied, so this observation "
+            "is not bound to the applied database, mode, or trigger lifecycle."
+        )
+    elif not manifest_context["matches"]:
         lines.append(
             "Warning: the rollback manifest does not match the selected database "
             "and exact observed trigger state."
@@ -672,7 +680,8 @@ def _run_verify(args: argparse.Namespace) -> int:
     mismatch = False
     manifest_context: dict[str, Any] = {
         "provided": False,
-        "matches": True,
+        "matches": False,
+        "manifest_required_for_full_verification": True,
         "database_path_matches": None,
         "database_matches": None,
         "file_identity_available": None,
@@ -749,6 +758,7 @@ def _run_verify(args: argparse.Namespace) -> int:
                 and mode_matches
                 and trigger_state_matches
             ),
+            "manifest_required_for_full_verification": True,
             "database_path_matches": database_path_matches,
             "database_matches": database_matches,
             "file_identity_available": file_identity_available,

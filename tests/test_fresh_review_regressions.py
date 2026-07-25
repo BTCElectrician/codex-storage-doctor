@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import io
-import json
 import os
 from pathlib import Path
 import subprocess
@@ -9,7 +8,12 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from helpers import clear_process_scan, create_database
+from helpers import (
+    clear_process_scan,
+    create_database,
+    decode_json,
+    synthetic_rollback_token,
+)
 from codex_storage_doctor import cli, mitigation
 from codex_storage_doctor.mitigation import (
     MutationRecoveryRequired,
@@ -90,7 +94,7 @@ class FreshReviewRegressionTests(unittest.TestCase):
                 )
 
             self.assertEqual(code, cli.EXIT_PARTIAL)
-            context = json.loads(stdout.getvalue())["manifest_context"]
+            context = decode_json(stdout.getvalue())["manifest_context"]
             self.assertEqual(
                 context["expected_state"],
                 "indeterminate_prepared",
@@ -215,22 +219,28 @@ class FreshReviewRegressionTests(unittest.TestCase):
             }
             apply_result = _post_commit_recovery_result(
                 **common,
-                prepared_token="ROLLBACK-PREPARED",
-                current_token="ROLLBACK-ADVANCED",
+                prepared_token=synthetic_rollback_token("PREPARED"),
+                current_token=synthetic_rollback_token("ADVANCED"),
             )
             rollback_result = _rollback_reconciliation_result(
                 **common,
-                original_token="ROLLBACK-ORIGINAL",
-                current_token="ROLLBACK-ROLLED-BACK",
+                original_token=synthetic_rollback_token("ORIGINAL"),
+                current_token=synthetic_rollback_token("ROLLED-BACK"),
             )
 
         self.assertEqual(
             apply_result["rollback_token_candidates"],
-            ["ROLLBACK-PREPARED", "ROLLBACK-ADVANCED"],
+            [
+                synthetic_rollback_token("PREPARED"),
+                synthetic_rollback_token("ADVANCED"),
+            ],
         )
         self.assertEqual(
             rollback_result["rollback_token_candidates"],
-            ["ROLLBACK-ORIGINAL", "ROLLBACK-ROLLED-BACK"],
+            [
+                synthetic_rollback_token("ORIGINAL"),
+                synthetic_rollback_token("ROLLED-BACK"),
+            ],
         )
         apply_text = cli._apply_text(apply_result)
         rollback_text = cli._rollback_text(rollback_result)

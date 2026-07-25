@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from helpers import clear_process_scan, create_database
+from helpers import clear_process_scan, create_database, decode_json
 from codex_storage_doctor import cli
 from codex_storage_doctor import mitigation
 from codex_storage_doctor.models import ProcessObservation, ProcessScan
@@ -86,7 +86,7 @@ class CLITests(unittest.TestCase):
                 )
             self.assertEqual(code, cli.EXIT_OK)
             output = stdout.getvalue()
-            report = json.loads(output)
+            report = decode_json(output)
             self.assertEqual(report["databases"][0]["inspection"]["row_count"], 1)
             self.assertNotIn(str(database), output)
             for canary in (
@@ -160,7 +160,7 @@ class CLITests(unittest.TestCase):
             self.assertNotIn(profile_canary, rendered)
             self.assertNotIn(schema_canary, rendered)
             self.assertNotIn(type_canary, rendered)
-            report = json.loads(rendered)
+            report = decode_json(rendered)
             inspection = report["databases"][0]["inspection"]
             self.assertEqual(
                 inspection["unrecognized_schema_column_count"],
@@ -211,7 +211,7 @@ class CLITests(unittest.TestCase):
             ):
                 code = cli.main(["audit", "--json"])
             self.assertEqual(code, cli.EXIT_OK)
-            report = json.loads(stdout.getvalue())
+            report = decode_json(stdout.getvalue())
             candidate = report["databases"][0]["candidate"]
             self.assertEqual(candidate["sources"], ["process:open_handle"])
             self.assertIn("open_by_codex_process", candidate["evidence_labels"])
@@ -328,7 +328,7 @@ class CLITests(unittest.TestCase):
                 )
 
             self.assertEqual(code, cli.EXIT_RECOVERY_REQUIRED)
-            recovery = json.loads(stdout.getvalue())
+            recovery = decode_json(stdout.getvalue())
             self.assertEqual(
                 recovery["status"],
                 "mutation_recovery_required",
@@ -969,7 +969,7 @@ class CLITests(unittest.TestCase):
                     ]
                 )
             self.assertEqual(code, cli.EXIT_OK)
-            report = json.loads(stdout.getvalue())
+            report = decode_json(stdout.getvalue())
             self.assertTrue(report["manifest_context"]["matches"])
             self.assertTrue(
                 report["manifest_context"]["exact_trigger_state_matches"]
@@ -1004,7 +1004,7 @@ class CLITests(unittest.TestCase):
                     ]
                 )
             self.assertEqual(extra_code, cli.EXIT_PARTIAL)
-            extra_report = json.loads(extra_stdout.getvalue())
+            extra_report = decode_json(extra_stdout.getvalue())
             self.assertFalse(extra_report["manifest_context"]["matches"])
             self.assertEqual(
                 extra_report["inspection"][
@@ -1033,6 +1033,47 @@ class CLITests(unittest.TestCase):
                     ]
                 )
             self.assertEqual(mismatch_code, cli.EXIT_PARTIAL)
+
+    def test_verify_without_manifest_is_explicitly_unbound_and_partial(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = create_database(root)
+            plan = create_plan(database, "balanced")
+            cli.apply_plan(
+                plan,
+                plan["confirmation_token"],
+                process_scanner=clear_process_scan,
+            )
+
+            def sampled(path, seconds):
+                return sample_database(
+                    path,
+                    seconds,
+                    process_scan=ProcessScan(status="ok"),
+                    sleep_fn=lambda _seconds: None,
+                )
+
+            stdout = io.StringIO()
+            with (
+                patch.object(cli, "sample_database", side_effect=sampled),
+                patch("sys.stdout", stdout),
+            ):
+                code = cli.main(
+                    [
+                        "verify",
+                        "--database",
+                        str(database),
+                        "--sample-seconds",
+                        "0",
+                        "--json",
+                    ]
+                )
+
+            self.assertEqual(code, cli.EXIT_PARTIAL)
+            context = decode_json(stdout.getvalue())["manifest_context"]
+            self.assertFalse(context["provided"])
+            self.assertFalse(context["matches"])
+            self.assertTrue(context["manifest_required_for_full_verification"])
 
     def test_verify_refuses_replacement_with_expected_trigger(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1084,7 +1125,7 @@ class CLITests(unittest.TestCase):
                 )
 
             self.assertEqual(code, cli.EXIT_PARTIAL)
-            context = json.loads(stdout.getvalue())["manifest_context"]
+            context = decode_json(stdout.getvalue())["manifest_context"]
             self.assertTrue(context["database_path_matches"])
             self.assertFalse(context["file_identity_matches"])
             self.assertFalse(context["database_matches"])
@@ -1141,7 +1182,7 @@ class CLITests(unittest.TestCase):
                 )
 
             self.assertEqual(code, cli.EXIT_PARTIAL)
-            context = json.loads(stdout.getvalue())["manifest_context"]
+            context = decode_json(stdout.getvalue())["manifest_context"]
             self.assertFalse(context["base_schema_matches"])
             self.assertFalse(context["logs_trigger_set_matches"])
             self.assertFalse(context["exact_trigger_state_matches"])

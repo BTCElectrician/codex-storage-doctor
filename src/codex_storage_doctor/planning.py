@@ -43,6 +43,8 @@ END
 """.strip(),
 }
 LOG_DB_NAME = re.compile(r"^logs_[0-9]+\.sqlite$", re.IGNORECASE)
+
+
 class PlanError(RuntimeError):
     """A plan cannot be created or validated safely."""
 
@@ -81,6 +83,13 @@ def normalize_sql(sql: str) -> str:
 
 def sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _is_sha256(value: Any) -> bool:
+    return bool(
+        isinstance(value, str)
+        and re.fullmatch(r"[0-9a-f]{64}", value)
+    )
 
 
 def canonical_json(value: Mapping[str, Any]) -> bytes:
@@ -254,6 +263,10 @@ def calculate_plan_digest(plan: Mapping[str, Any]) -> str:
     return hashlib.sha256(canonical_json(_plan_digest_payload(plan))).hexdigest()
 
 
+def expected_artifact_root(database: Path) -> Path:
+    return database.parent / ".codex-storage-doctor" / "rollback"
+
+
 def create_plan(
     database: Path,
     mode: str,
@@ -302,7 +315,7 @@ def create_plan(
         )
 
     identity = read_file_identity(path)
-    artifact_root = path.parent / ".codex-storage-doctor" / "rollback"
+    artifact_root = expected_artifact_root(path)
     plan: dict[str, Any] = {
         "schema_version": PLAN_SCHEMA,
         "tool_version": __version__,
@@ -365,9 +378,43 @@ def create_plan(
 def validate_plan_document(plan: Mapping[str, Any]) -> None:
     if plan.get("schema_version") != PLAN_SCHEMA:
         raise PlanError("unsupported plan schema")
+    if plan.get("tool_version") != __version__:
+        raise PlanError("plan tool version mismatch; create a fresh plan")
     mode = str(plan.get("mode", ""))
     if mode not in TRIGGER_SQL:
         raise PlanError("unsupported plan mode")
+    database_value = plan.get("database")
+    if not isinstance(database_value, str) or not database_value:
+        raise PlanError("plan database target is invalid")
+    database = Path(database_value)
+    if not database.is_absolute() or not LOG_DB_NAME.fullmatch(database.name):
+        raise PlanError("plan database target is invalid")
+    if plan.get("database_name") != database.name:
+        raise PlanError("plan database target name mismatch")
+    artifact_root_value = plan.get("artifact_root")
+    if not isinstance(artifact_root_value, str) or not artifact_root_value:
+        raise PlanError("plan artifact root is invalid")
+    artifact_root = Path(artifact_root_value)
+    if not artifact_root.is_absolute():
+        raise PlanError("plan artifact root is invalid")
+    expected_root = expected_artifact_root(database)
+    if os.path.normcase(os.path.normpath(str(artifact_root))) != os.path.normcase(
+        os.path.normpath(str(expected_root))
+    ):
+        raise PlanError("plan artifact root does not match the database target")
+    identity = plan.get("file_identity")
+    if not isinstance(identity, Mapping):
+        raise PlanError("plan file identity is invalid")
+    for field in ("device", "inode"):
+        value = identity.get(field)
+        if (
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or value < 0
+        ):
+            raise PlanError("plan file identity is invalid")
+    if not _is_sha256(plan.get("base_schema_fingerprint")):
+        raise PlanError("plan base schema fingerprint is invalid")
     expected_digest = calculate_plan_digest(plan)
     if plan.get("plan_digest") != expected_digest:
         raise PlanError("plan digest mismatch; artifact was changed")

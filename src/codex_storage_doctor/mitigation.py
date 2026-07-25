@@ -21,6 +21,7 @@ from .planning import (
     PlanError,
     cross_boundary_reason,
     doctor_triggers_connection,
+    expected_artifact_root,
     log_triggers_connection,
     normalize_sql,
     observed_codex_version,
@@ -32,7 +33,7 @@ from .planning import (
     validate_plan_document,
 )
 from .privacy import controlled_error_code
-from .reports import write_private_json
+from .reports import ArtifactReadError, read_json_object, write_private_json
 
 MANIFEST_SCHEMA = "codex-storage-doctor.rollback.v1"
 MIN_FREE_MARGIN = 10 * 1024 * 1024
@@ -146,10 +147,12 @@ def ensure_process_gate(
             if isinstance(raw_open_ids, (list, tuple))
             else set()
         )
+        is_codex_value = process.get("is_codex")
         is_known_self_handle = bool(
             isinstance(pid, int)
             and pid in allowed_holder_pids
-            and process.get("is_codex") is False
+            and isinstance(is_codex_value, bool)
+            and not is_codex_value
             and open_ids == {"database-001"}
         )
         if is_known_self_handle:
@@ -260,9 +263,20 @@ def _backup_database(
         raise
     else:
         backup.close()
-    _restrict(temporary, 0o600)
-    temporary.replace(destination)
-    _restrict(destination, 0o600)
+    try:
+        _restrict(temporary, 0o600)
+        if os.name == "nt":
+            temporary.rename(destination)
+        else:
+            os.link(temporary, destination)
+            temporary.unlink()
+        _restrict(destination, 0o600)
+    except BaseException:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+        raise
     return _sha256_file(destination), destination.stat().st_size
 
 
@@ -334,11 +348,45 @@ def validate_manifest(manifest: Mapping[str, Any]) -> None:
         raise SafetyGateError("rollback manifest database target is invalid")
     if manifest.get("database_name") != database_path.name:
         raise SafetyGateError("rollback manifest database name mismatch")
+    backup_path_value = manifest.get("backup_path")
+    if not isinstance(backup_path_value, str) or not backup_path_value:
+        raise SafetyGateError("rollback manifest backup path is invalid")
+    backup_path = Path(backup_path_value)
+    if (
+        not backup_path.is_absolute()
+        or backup_path.name != "logs-before-apply.sqlite"
+        or backup_path.parent.parent != expected_artifact_root(database_path)
+    ):
+        raise SafetyGateError("rollback artifact path is invalid")
+    for field in (
+        "backup_sha256",
+        "base_schema_fingerprint_before",
+        "plan_digest",
+    ):
+        value = manifest.get(field)
+        if (
+            not isinstance(value, str)
+            or len(value) != 64
+            or any(character not in "0123456789abcdef" for character in value)
+        ):
+            raise SafetyGateError(f"rollback manifest {field} is invalid")
+    backup_size = manifest.get("backup_size")
+    if (
+        not isinstance(backup_size, int)
+        or isinstance(backup_size, bool)
+        or backup_size < 0
+    ):
+        raise SafetyGateError("rollback manifest backup size is invalid")
     identity = manifest.get("file_identity_at_apply")
     if not isinstance(identity, dict):
         raise SafetyGateError("rollback manifest lacks target file identity")
-    for field in ("device", "inode"):
-        if not isinstance(identity.get(field), int):
+    for field in ("size", "mtime_ns", "device", "inode"):
+        value = identity.get(field)
+        if (
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or value < 0
+        ):
             raise SafetyGateError("rollback manifest file identity is invalid")
 
 
@@ -413,13 +461,11 @@ def _post_commit_recovery_result(
     durable_token: str | None = None
     durable_status = "unverified"
     try:
-        with manifest_path.open("r", encoding="utf-8") as handle:
-            durable_manifest = json.load(handle)
-        if isinstance(durable_manifest, dict):
-            validate_manifest(durable_manifest)
-            durable_token = str(durable_manifest["rollback_token"])
-            durable_status = str(durable_manifest["status"])
-    except (OSError, UnicodeError, json.JSONDecodeError, SafetyGateError):
+        durable_manifest = read_json_object(manifest_path)
+        validate_manifest(durable_manifest)
+        durable_token = str(durable_manifest["rollback_token"])
+        durable_status = str(durable_manifest["status"])
+    except (ArtifactReadError, SafetyGateError):
         pass
 
     result: dict[str, Any] = {
@@ -466,13 +512,11 @@ def _rollback_reconciliation_result(
     durable_status = "unverified"
     if manifest_path is not None:
         try:
-            with manifest_path.open("r", encoding="utf-8") as handle:
-                durable_manifest = json.load(handle)
-            if isinstance(durable_manifest, dict):
-                validate_manifest(durable_manifest)
-                durable_token = str(durable_manifest["rollback_token"])
-                durable_status = str(durable_manifest["status"])
-        except (OSError, UnicodeError, json.JSONDecodeError, SafetyGateError):
+            durable_manifest = read_json_object(manifest_path)
+            validate_manifest(durable_manifest)
+            durable_token = str(durable_manifest["rollback_token"])
+            durable_status = str(durable_manifest["status"])
+        except (ArtifactReadError, SafetyGateError):
             pass
     result: dict[str, Any] = {
         "schema_version": (
@@ -533,6 +577,11 @@ def apply_plan(
         )
 
     database = Path(str(plan["database"])).expanduser().resolve(strict=True)
+    artifact_root = Path(str(plan["artifact_root"])).expanduser().resolve()
+    if artifact_root != expected_artifact_root(database).resolve():
+        raise SafetyGateError(
+            "plan artifact root does not match the resolved database target"
+        )
     boundary = cross_boundary_reason(database)
     if boundary:
         raise SafetyGateError(f"audit-only cross-boundary path: {boundary}")
@@ -585,7 +634,6 @@ def apply_plan(
                 "changed": False,
             }
 
-    artifact_root = Path(str(plan["artifact_root"])).expanduser().resolve()
     artifact_filesystem_reason = nonlocal_filesystem_reason(artifact_root)
     if artifact_filesystem_reason:
         raise SafetyGateError(
@@ -859,7 +907,22 @@ def rollback(
     ):
         raise SafetyGateError("rollback target identity changed")
 
-    artifact_dir = Path(str(manifest["backup_path"])).resolve().parent
+    original_backup_path = Path(str(manifest["backup_path"])).expanduser().resolve()
+    artifact_dir = original_backup_path.parent
+    resolved_artifact_root = expected_artifact_root(database).resolve()
+    if artifact_dir.parent != resolved_artifact_root:
+        raise SafetyGateError(
+            "rollback artifact directory does not match the database target"
+        )
+    if manifest_path is not None:
+        resolved_manifest_path = manifest_path.expanduser().resolve()
+        if (
+            resolved_manifest_path.parent != artifact_dir
+            or resolved_manifest_path.name != "rollback-manifest.json"
+        ):
+            raise SafetyGateError(
+                "rollback manifest path does not match its artifact directory"
+            )
     artifact_filesystem_reason = nonlocal_filesystem_reason(artifact_dir)
     if artifact_filesystem_reason:
         raise SafetyGateError(

@@ -20,58 +20,56 @@ Last updated: 2026-07-24 (America/Chicago)
   standard-library implementation, so native Windows mutation intentionally
   fails closed. Linux/Windows behavior is fixture-tested on native hosted
   runners, not validated against a real Codex installation.
-- **Safety hardening accepted:** fresh independent adversarial review found no
-  remaining P1/P2 implementation blockers after the correction cycle. The
-  final reviewed implementation covers ambiguous commit outcomes,
-  post-mutation output failures and interruptions, strict handle parsing,
-  path-value privacy, zipapp exit propagation, complete recovery coordinates,
-  self-handle exclusion, and exact post-commit schema/trigger verification.
-- **Published:** public GitHub source repository with `main` as the default
-  branch. The reviewed implementation and Windows portability follow-ups are
-  pushed through commit `64fd1022a8cea41f955eac9739d2979eedf43e7a`.
-- **Planned only after operator approval:** package/plugin release, demo
-  recording, screenshot, launch post, and any upstream communication.
+- **Safety hardening accepted locally for `v0.1.1`:** the final adversarial
+  pass found and corrected three residual boundary failures: resealed plans
+  could redirect backup/permission operations, resealed manifests could
+  redirect rollback artifacts, and manifest-less verification incorrectly
+  reported a full match. Plans and manifests are now structurally validated
+  and path-derived, backups publish without replacement, and unbound verify is
+  explicitly partial.
+- **Published:** public GitHub source repository and `v0.1.0` release. The
+  `v0.1.1` safety release is the current release candidate and must pass the
+  hosted matrix before its tag and assets are published.
+- **Planned only after operator approval:** public plugin listing, demo
+  recording, screenshot, external social post, and upstream communication.
 - **Ready to share with documented conditions:** source and audit/remediation
   workflows passed independent review and the hosted matrix. Native Windows
   mutation remains intentionally fail-closed; all documented operator gates
   and limitations still apply.
-- **Not authorized / not done:** package or plugin release, public launch
-  communication, persistent personal install, real Codex database mutation,
-  deletion, `VACUUM`, sidecar removal, environment or journal-mode changes,
-  background jobs, or Oracle review.
+- **Not authorized / not done:** package-index or public plugin release,
+  persistent personal install, real Codex database mutation, deletion,
+  `VACUUM`, sidecar removal, environment or journal-mode changes, background
+  jobs, or Oracle review.
 
 ## Local validation
 
 Current accepted evidence:
 
-- 105 synthetic unit/integration tests pass under isolated operator-home and
+- 108 synthetic unit/integration tests pass under isolated operator-home and
   executable lookup.
 - `make check` passes, including deterministic wheel/zipapp double-build tests,
   current-source and root-entrypoint artifact parity, packaged failure-exit
-  propagation, compileall, leak guard over 65 text files, and distribution
+  propagation, compileall, leak guard over 60 text files, and distribution
   validation.
-- Current local artifact SHA-256 values:
+- Current local `v0.1.1` artifact SHA-256 values:
   - zipapp:
-    `9bca204ed38d43554296f0cbf0326438c8c0e9fa8c83ccb91825afb2634a6aa8`
+    `21054f6489927eae4ed2142094f348bac471c6fec1cb7a8c5bb602c42121e254`
   - wheel:
-    `e517b0d7610b07976a2e3ba31355683ff862f85ac285d9e0bd59ab50162401d7`
+    `5b76645c978af2ce4fc2afa7848ae014bada9337522048ff0d54e4b3a5d1ae41`
 - Independent probes cover prepared-manifest verification, concrete malformed
   `lsof` record shapes, strict self-holder near-matches, forward-slash UNC
   privacy, zipapp nonzero failures, and every unverified recovery-token
-  candidate. Post-commit apply races cover schema changes, unrelated logs
-  triggers, and doctor-prefixed triggers on other tables.
+  candidate. New `v0.1.1` probes prove that resealed plans/manifests cannot
+  redirect permission or backup operations and manifest-less verification
+  cannot return a full-match success. Post-commit apply races cover schema
+  changes, unrelated logs triggers, and doctor-prefixed triggers on other
+  tables.
 - `git diff --check` passes.
 - No real Codex database was opened, copied, or mutated by this correction
   work.
-- Fresh hosted CI run `30125384716` passed all six macOS, Ubuntu, and Windows
-  jobs on Python 3.11 and 3.14 for commit
-  `64fd1022a8cea41f955eac9739d2979eedf43e7a`, including tests, packaging,
-  artifact verification, privacy checks, and installation smokes.
-- Fresh-context adversarial review found no remaining P1/P2 implementation
-  blockers and returned **SAFE WITH CONDITIONS** before the exact reviewed
-  implementation was committed. Both subsequent commits were test-only
-  Windows portability corrections and received narrow independent acceptance;
-  no production safety gate changed.
+- Release-candidate hosted CI for `v0.1.1` is required before publication.
+  The prior `v0.1.0` commit `ee357b894f13fc2c5d91d72042926a3390d1892f`
+  passed two fresh six-job hosted matrices.
 
 The superseded 82-test candidate had passed its local gate and produced
 artifacts, but the later adversarial review proved that it omitted
@@ -109,8 +107,9 @@ Fresh Sol accepted implementation commit
 The later hosted correction was independently reviewed and accepted before
 push, but the newer adversarial review of `450ac0f` superseded that acceptance
 for general-use remediation. The operator separately authorized public
-repository creation and `origin/main` publication. Package/plugin releases,
-personal installation, and real-database mutation remain unauthorized.
+repository creation, `origin/main` publication, and GitHub release artifacts.
+Package-index/public plugin publication, personal installation, and
+real-database mutation remain separate and were not performed by this work.
 
 ## Development-boundary note
 
@@ -137,6 +136,8 @@ report was removed, the smoke procedure was corrected to isolate `HOME` and
   initial verdict **unsafe to share** at `450ac0f`; final corrected snapshot
   verdict **SAFE WITH CONDITIONS**, with no remaining P1/P2 implementation
   blockers
-- Hosted final matrix: run `30125384716`, six of six jobs passed on commit
-  `64fd1022a8cea41f955eac9739d2979eedf43e7a`
+- Current completion pass: independent adversarial re-review of `ee357b8`,
+  three additional boundary regressions corrected for `v0.1.1`; no real Codex
+  database opened, copied, or mutated
+- Hosted `v0.1.1` matrix: pending release-candidate push
 - Oracle: not invoked
