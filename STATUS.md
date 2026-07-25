@@ -27,9 +27,9 @@ Last updated: 2026-07-24 (America/Chicago)
   reported a full match. Plans and manifests are now structurally validated
   and path-derived, backups publish without replacement, and unbound verify is
   explicitly partial.
-- **Published:** public GitHub source repository and `v0.1.0` release. The
-  `v0.1.1` safety release is the current release candidate and must pass the
-  hosted matrix before its tag and assets are published.
+- **Published:** public GitHub source repository and `v0.1.1` safety release
+  with wheel, dependency-free zipapp, and SHA-256 checksums. The superseded
+  `v0.1.0` release remains available for provenance.
 - **Planned only after operator approval:** public plugin listing, demo
   recording, screenshot, external social post, and upstream communication.
 - **Ready to share with documented conditions:** source and audit/remediation
@@ -67,9 +67,13 @@ Current accepted evidence:
 - `git diff --check` passes.
 - No real Codex database was opened, copied, or mutated by this correction
   work.
-- Release-candidate hosted CI for `v0.1.1` is required before publication.
-  The prior `v0.1.0` commit `ee357b894f13fc2c5d91d72042926a3390d1892f`
-  passed two fresh six-job hosted matrices.
+- Hosted CI run
+  [`30137226576`](https://github.com/BTCElectrician/codex-storage-doctor/actions/runs/30137226576)
+  passed all six macOS, Ubuntu, and Windows jobs on Python 3.11 and 3.14 at
+  safety-hardening commit
+  `63384ac8f290d8251834afc9e56f1d6bc597a78c`. An earlier candidate run exposed
+  two Windows-only test handle leaks; those test connections were explicitly
+  closed and the complete matrix then passed.
 
 The superseded 82-test candidate had passed its local gate and produced
 artifacts, but the later adversarial review proved that it omitted
@@ -139,5 +143,6 @@ report was removed, the smoke procedure was corrected to isolate `HOME` and
 - Current completion pass: independent adversarial re-review of `ee357b8`,
   three additional boundary regressions corrected for `v0.1.1`; no real Codex
   database opened, copied, or mutated
-- Hosted `v0.1.1` matrix: pending release-candidate push
+- Hosted `v0.1.1` matrix: run `30137226576`, six of six jobs passed at
+  `63384ac8f290d8251834afc9e56f1d6bc597a78c`
 - Oracle: not invoked
