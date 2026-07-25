@@ -57,7 +57,7 @@ Current accepted evidence:
   - zipapp:
     `21054f6489927eae4ed2142094f348bac471c6fec1cb7a8c5bb602c42121e254`
   - wheel:
-    `0b1fdce6bb937d297846803526924d9cfa8e56123d52cefb5591d8630d3aeb0b`
+    `e895c76d8b1b4f3e4132e071a4f5aa904efe6f288d4236e301624c072b7ac5ab`
 - Independent probes cover prepared-manifest verification, concrete malformed
   `lsof` record shapes, strict self-holder near-matches, forward-slash UNC
   privacy, zipapp nonzero failures, and every unverified recovery-token
@@ -69,13 +69,14 @@ Current accepted evidence:
 - `git diff --check` passes.
 - No real Codex database was opened, copied, or mutated by this correction
   work.
-- Hosted CI run
-  [`30137226576`](https://github.com/BTCElectrician/codex-storage-doctor/actions/runs/30137226576)
+- Final public-main CI run
+  [`30137553045`](https://github.com/BTCElectrician/codex-storage-doctor/actions/runs/30137553045)
   passed all six macOS, Ubuntu, and Windows jobs on Python 3.11 and 3.14 at
-  safety-hardening commit
-  `63384ac8f290d8251834afc9e56f1d6bc597a78c`. An earlier candidate run exposed
-  two Windows-only test handle leaks; those test connections were explicitly
-  closed and the complete matrix then passed.
+  accepted main commit
+  `8454dac61325cd9f57d0f008343ec3814a64f9e7`. The preceding branch matrix also
+  passed before the exact commit was fast-forwarded to `main`. An earlier
+  candidate exposed two Windows-only test handle leaks; those test connections
+  were explicitly closed before acceptance.
 
 The superseded 82-test candidate had passed its local gate and produced
 artifacts, but the later adversarial review proved that it omitted
@@ -145,6 +146,6 @@ report was removed, the smoke procedure was corrected to isolate `HOME` and
 - Current completion pass: independent adversarial re-review of `ee357b8`,
   three additional boundary regressions corrected for `v0.1.1`; no real Codex
   database opened, copied, or mutated
-- Hosted `v0.1.1` matrix: run `30137226576`, six of six jobs passed at
-  `63384ac8f290d8251834afc9e56f1d6bc597a78c`
+- Final public-main matrix: run `30137553045`, six of six jobs passed at
+  `8454dac61325cd9f57d0f008343ec3814a64f9e7`
 - Oracle: not invoked

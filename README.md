@@ -1,7 +1,15 @@
 # Codex Storage Doctor
 
-Preservation-first diagnosis and reversible mitigation for Codex SQLite
-diagnostic-log churn.
+<div align="center">
+
+[![CI](https://github.com/BTCElectrician/codex-storage-doctor/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/BTCElectrician/codex-storage-doctor/actions/workflows/ci.yml)
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/downloads/)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
+</div>
+
+**Preservation-first diagnosis and reversible mitigation for Codex SQLite
+diagnostic-log churn.**
 
 > **Repository status — public alpha.** Source tag `v0.1.1` and current
 > `main` contain the reviewed implementation. Binary GitHub release assets are
@@ -10,6 +18,26 @@ diagnostic-log churn.
 > packaging checks. Native Windows mutation remains deliberately unavailable
 > until trustworthy handle evidence can be proven. No package-index or public
 > plugin listing is claimed.
+
+## TL;DR
+
+**The problem.** Codex diagnostic databases can be duplicated across profiles
+and surfaces, and SQLite activity is easy to misread as proof of physical-drive
+wear. Choosing the wrong file—or reaching for generic cleanup commands—can put
+unrelated data at risk.
+
+**The solution.** Codex Storage Doctor discovers likely diagnostic databases,
+reports privacy-bounded evidence, and keeps every mitigation behind an exact
+plan, closed-Codex checks, a verified fresh backup, and a narrow rollback
+manifest.
+
+| Need | What the doctor provides |
+| --- | --- |
+| Find the active database | Bounded discovery plus configured, open, changing, stale, and unknown classifications |
+| Inspect without reading payloads | Allowlisted schema and aggregate metadata; paths redacted by default |
+| Avoid overclaiming | Separate logical SQLite churn, process evidence, filesystem behavior, and physical-media health |
+| Preview a mitigation | Read-only, self-digested plan bound to one explicit database, mode, schema, version, and file identity |
+| Change or undo safely | Fail-closed gates, fresh verified backups, one namespaced trigger, exact verification, and trigger-only rollback |
 
 Codex Storage Doctor is designed to answer five questions without reading your
 prompts or diagnostic payloads:
@@ -45,6 +73,19 @@ The useful response is careful diagnosis, not panic:
 
 See [the source ledger](docs/EVIDENCE.md) for the evidence and
 [the safety model](docs/SAFETY.md) before using a mitigation.
+
+## Where it fits
+
+| Approach | Best at | Built-in privacy and mutation boundaries | What it does not establish |
+| --- | --- | --- | --- |
+| **Codex Storage Doctor** | Codex-specific discovery, bounded SQLite evidence, and reversible trigger mitigation | Payload-column denylist, redacted paths, exact plans, closed-process gates, verified backups, and narrow rollback | Physical SSD endurance or sole causation |
+| Manual `sqlite3` inspection | Ad hoc queries by an experienced operator | Depends entirely on the commands and review discipline used | Which duplicate is active, unless separately proven |
+| Generic database cleanup tools | Broad deletion, compaction, or database maintenance | Not tailored to Codex diagnostic schemas or this rollback contract | Whether a Codex-specific mitigation is safe |
+| SMART/NVMe and OS I/O tools | Device-health counters and system-level I/O evidence | Outside the Codex database and its contents | Which Codex table or query caused the observed history |
+
+Use the doctor when the question is about Codex diagnostic SQLite behavior.
+Use storage-health tools alongside it when the question is about the physical
+device. Do not substitute one evidence layer for the other.
 
 ## Quick start
 
@@ -146,6 +187,42 @@ codex-storage-doctor rollback \
 
 Rollback creates a fresh backup before dropping the trigger. It does not
 overwrite the live database with an older backup.
+
+## Safety architecture
+
+The tool has two lanes. `audit`, `plan`, and `verify` do not mutate the selected
+Codex database. `apply` and `rollback` are available only after the target,
+operator, process state, filesystem, plan or manifest, and backup all pass
+their gates.
+
+```text
+Known homes, profiles, configuration, and explicit roots
+                         |
+                         v
+          Bounded discovery and classification
+                         |
+                         v
+           Explicit logs_<n>.sqlite selection
+                         |
+             +-----------+-----------+
+             |                       |
+             v                       v
+  Codex-database read-only     Authorized mutation lane
+  audit -> plan -> verify      apply or rollback
+             |                       |
+             |              exact plan / manifest binding
+             |              schema, version, and file identity
+             |              Codex closed + handle evidence
+             |              positively known local filesystem
+             |              fresh, verified private backup
+             |                       |
+             v                       v
+  Redacted report or plan      Exact doctor trigger + manifest
+```
+
+The doctor does not install a daemon or keep a background process running.
+Plans and reports are ordinary artifacts; apply and rollback operate only when
+the operator invokes them.
 
 ## Mitigation modes
 
@@ -291,6 +368,67 @@ As of 2026-07-24:
 
 See `STATUS.md` for the current handoff truth and exact validation record.
 
+## Troubleshooting
+
+### Exit 3: no supported log database found
+
+Start with bounded discovery, then add only homes or database roots you have
+reviewed:
+
+```bash
+codex-storage-doctor audit \
+  --codex-home "/reviewed/path/to/codex-home" \
+  --sqlite-home "/reviewed/path/to/sqlite-home"
+```
+
+Both options are repeatable. Discovery deliberately does not crawl the whole
+disk.
+
+### Exit 4: inspection is partial
+
+Partial is a safety result, not a prompt to bypass a check. It can mean SQLite
+could not initialize read-only WAL state, required platform evidence was
+unavailable, or `verify` was run without its manifest. Inspect the bounded JSON
+result:
+
+```bash
+codex-storage-doctor audit --json
+```
+
+For a fully bound mitigation check, pass the exact rollback manifest produced
+by `apply`:
+
+```bash
+codex-storage-doctor verify \
+  --database "/reviewed/path/to/logs_2.sqlite" \
+  --manifest "/path/from-apply/rollback-manifest.json"
+```
+
+### Exit 5: a mutation safety gate refused
+
+Quit every Codex Desktop, CLI, and IDE surface, then retry from an external
+terminal. If handle visibility, filesystem locality, ownership, or a
+Windows/WSL boundary remains unknown, do not override it; mutation is
+intentionally unavailable in that state.
+
+### Exit 6: the schema changed or the plan is stale
+
+Discard the old plan. Re-run `audit`, review the selected database, and create
+a new plan. Do not edit or reseal a stale plan.
+
+### Exit 7: plan, backup, manifest, or artifact failure
+
+Run as the database owner, confirm adequate free space, and leave the private
+artifact directory in its database-derived location. The doctor will not
+replace an existing backup or accept a redirected artifact root.
+
+### Exit 9: commit outcome requires reconciliation
+
+Do not repeat the mutation blindly. Preserve the private artifacts and inspect
+the exact trigger state with `verify` and the manifest. Exit 9 means the change
+committed or its commit result is ambiguous, so recovery must reconcile the
+observed state first.
+
 ## Limitations
 
 - The doctor does not read SMART/NVMe endurance counters.
@@ -311,6 +449,55 @@ See `STATUS.md` for the current handoff truth and exact validation record.
   and errors, for future inserts while installed.
 - No bounded sample proves the absence of every Codex, filesystem, or physical
   device write.
+
+## FAQ
+
+### Does `audit` modify my Codex database?
+
+It does not change Codex rows, schema, triggers, journal mode, or pragmas.
+SQLite may update read marks in an existing `-shm` file while opening a WAL
+database read-only; the doctor reports a partial result if safe read-only
+initialization is unavailable.
+
+### Does the doctor read my conversations or prompts?
+
+No. Payload-bearing columns such as `feedback_log_body` and `message` are
+denylisted and never selected. Reports use field allowlists and redact paths by
+default. Still review any support artifact before sharing it.
+
+### Can I run it while Codex is open?
+
+Use `audit`, `plan`, and `verify` for read-only inspection. Before `apply` or
+`rollback`, quit every Codex Desktop, CLI, and IDE surface. Mutation refuses to
+run when the required process and handle evidence is not conclusive.
+
+### Should I choose balanced or maximum mode?
+
+Start with audit only. Balanced suppresses `TRACE`, `DEBUG`, and `INFO` while
+preserving `WARN`, `ERROR`, and unknown future levels, but it is coupled to the
+observed `logs.level` schema. Maximum suppresses every future diagnostic row,
+including warnings and errors. Roll back either mode before upgrading Codex,
+then re-audit.
+
+### Does this prove or prevent SSD wear?
+
+No. The doctor measures bounded logical SQLite evidence and, where available,
+process/filesystem context. It does not measure NAND writes, calculate drive
+endurance, or prove that Codex caused a device-health observation.
+
+### What happens on Windows or across WSL boundaries?
+
+Native Windows read-only audit is available, but native Windows mutation is
+disabled until dependable open-handle evidence exists. Windows-to-WSL and
+WSL-to-mounted-Windows targets are audit-only because neither side can prove
+the other side's process and lock state.
+
+### How do I undo a mitigation?
+
+Quit Codex and run `rollback` with the exact private manifest and rollback
+token produced by `apply`. Rollback creates another verified backup, then drops
+only the exact doctor-owned trigger; it never restores an older database over
+the live file.
 
 ## Project documents
 
