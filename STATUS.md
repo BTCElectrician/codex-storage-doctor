@@ -27,17 +27,19 @@ Last updated: 2026-07-24 (America/Chicago)
   reported a full match. Plans and manifests are now structurally validated
   and path-derived, backups publish without replacement, and unbound verify is
   explicitly partial.
-- **Published:** public GitHub source repository and `v0.1.1` safety release
-  with wheel, dependency-free zipapp, and SHA-256 checksums. The superseded
-  `v0.1.0` release remains available for provenance.
-- **Planned only after operator approval:** public plugin listing, demo
-  recording, screenshot, external social post, and upstream communication.
+- **Published:** public GitHub source repository and source tag `v0.1.1`.
+  Binary `v0.1.1` GitHub release assets are not published. The superseded
+  `v0.1.0` release remains available for provenance but is not the accepted
+  safety build.
+- **Planned only after operator approval:** binary GitHub release assets,
+  public plugin listing, demo recording, screenshot, external social post, and
+  upstream communication.
 - **Ready to share with documented conditions:** source and audit/remediation
   workflows passed independent review and the hosted matrix. Native Windows
   mutation remains intentionally fail-closed; all documented operator gates
   and limitations still apply.
-- **Not authorized / not done:** package-index or public plugin release,
-  persistent personal install, real Codex database mutation, deletion,
+- **Not authorized / not done:** binary or package-index release, public plugin
+  release, persistent personal install, real Codex database mutation, deletion,
   `VACUUM`, sidecar removal, environment or journal-mode changes, background
   jobs, or Oracle review.
 
@@ -55,7 +57,7 @@ Current accepted evidence:
   - zipapp:
     `21054f6489927eae4ed2142094f348bac471c6fec1cb7a8c5bb602c42121e254`
   - wheel:
-    `5b76645c978af2ce4fc2afa7848ae014bada9337522048ff0d54e4b3a5d1ae41`
+    `0b1fdce6bb937d297846803526924d9cfa8e56123d52cefb5591d8630d3aeb0b`
 - Independent probes cover prepared-manifest verification, concrete malformed
   `lsof` record shapes, strict self-holder near-matches, forward-slash UNC
   privacy, zipapp nonzero failures, and every unverified recovery-token
@@ -110,10 +112,10 @@ Fresh Sol accepted implementation commit
 `b22c5e9b01e4ab03da1b57a465015ff0b3cdf555` for local release-candidate use.
 The later hosted correction was independently reviewed and accepted before
 push, but the newer adversarial review of `450ac0f` superseded that acceptance
-for general-use remediation. The operator separately authorized public
-repository creation, `origin/main` publication, and GitHub release artifacts.
-Package-index/public plugin publication, personal installation, and
-real-database mutation remain separate and were not performed by this work.
+for general-use remediation. The public repository, `origin/main`, and source
+tag `v0.1.1` are published. Binary/package-index/public-plugin publication,
+personal installation, and real-database mutation remain separate and were
+not performed by this work.
 
 ## Development-boundary note
 

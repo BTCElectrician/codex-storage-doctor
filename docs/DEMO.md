@@ -1,8 +1,9 @@
 # 90-second synthetic demo
 
-Status: commands and fixture helper are implemented, and GitHub release
-`v0.1.1` is public. No demo recording, screenshot, external social post,
-public plugin listing, or upstream communication is claimed.
+Status: commands and fixture helper are implemented, and source tag `v0.1.1`
+is public. Binary GitHub release assets, demo recording, screenshot, external
+social post, public plugin listing, and upstream communication are not
+published.
 
 The demo never points at a real Codex home or diagnostic database. The first
 half uses the public CLI; the mutation sequence is recorded from an external
@@ -188,7 +189,7 @@ Close with:
 - [x] Primary-source statuses and version claims are refreshed immediately
       before any package/plugin release or launch communication.
 - [x] Operator explicitly authorized public repository publication.
-- [x] Operator explicitly authorized the GitHub wheel/zipapp release.
+- [ ] GitHub wheel/zipapp release assets are published.
 - [ ] Operator explicitly authorizes a public plugin listing and external
       launch assets.
 
@@ -200,5 +201,6 @@ Suggested launch assets after authorization:
    claim, and primary-source link;
 4. one upstream/support-ready synthetic report example.
 
-The GitHub release notes are public. The recording, screenshot, external
-social post, and upstream/support example have not been published.
+The source tag is public. Binary release assets, release notes, recording,
+screenshot, external social post, and upstream/support example have not been
+published.

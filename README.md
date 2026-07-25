@@ -3,13 +3,13 @@
 Preservation-first diagnosis and reversible mitigation for Codex SQLite
 diagnostic-log churn.
 
-> **Repository status — public alpha.** Release
-> [v0.1.1](https://github.com/BTCElectrician/codex-storage-doctor/releases/tag/v0.1.1)
-> contains the reviewed source, standalone zipapp, wheel, and SHA-256
-> checksums. The current safety gate has 108 isolated synthetic tests plus
-> hosted macOS, Linux, and Windows packaging checks. Native Windows mutation
-> remains deliberately unavailable until trustworthy handle evidence can be
-> proven. No package-index or public plugin listing is claimed.
+> **Repository status — public alpha.** Source tag `v0.1.1` and current
+> `main` contain the reviewed implementation. Binary GitHub release assets are
+> not published; build from a pinned source checkout. The current safety gate
+> has 108 isolated synthetic tests plus hosted macOS, Linux, and Windows
+> packaging checks. Native Windows mutation remains deliberately unavailable
+> until trustworthy handle evidence can be proven. No package-index or public
+> plugin listing is claimed.
 
 Codex Storage Doctor is designed to answer five questions without reading your
 prompts or diagnostic payloads:
@@ -48,8 +48,8 @@ See [the source ledger](docs/EVIDENCE.md) for the evidence and
 
 ## Quick start
 
-Use the reviewed GitHub release assets or a pinned source checkout. There is no
-package-index or public plugin listing.
+Use a pinned source checkout. There is no binary GitHub release bundle,
+package-index release, or public plugin listing.
 
 ```bash
 python3 -m venv .venv
@@ -230,17 +230,15 @@ installed interface.
 
 Runtime target: Python 3.11+ with no third-party runtime dependencies.
 
-The recommended distribution is the hash-verified GitHub release bundle:
+No binary GitHub release bundle is currently published. Use source tag
+`v0.1.1` or an exact reviewed commit, inspect it, and build locally. The build
+produces:
 
-- `codex-storage-doctor.pyz`
-- `codex_storage_doctor-0.1.1-py3-none-any.whl`
-- `SHA256SUMS.txt`
+- `dist/codex-storage-doctor.pyz`
+- `dist/codex_storage_doctor-0.1.1-py3-none-any.whl`
 
-Download all three from the
-[v0.1.1 release](https://github.com/BTCElectrician/codex-storage-doctor/releases/tag/v0.1.1)
-and verify the asset hashes before installation or execution. GitHub release
-hashes establish byte integrity for that download; they are not a maintainer
-signature or package-index attestation.
+The deterministic hashes recorded in `STATUS.md` are local and hosted-build
+evidence, not a signature or a claim that matching downloadable assets exist.
 
 From a source checkout:
 
@@ -287,8 +285,9 @@ As of 2026-07-24:
 | WSL discovery | **Implemented with fixtures** | Native-side operation supported by design; cross-boundary mutation is refused |
 | Skill and minimal plugin | **Implemented locally** | Schema/layout validation passes; separately installed CLI remains required |
 | Source repository | **Public** | `BTCElectrician/codex-storage-doctor`; `main` is the default branch |
-| GitHub release | **Published** | `v0.1.1` source, wheel, zipapp, and SHA-256 checksums |
-| Package index and public plugin listing | **Not published** | Install only from a reviewed GitHub release or pinned source |
+| Source tag | **Published** | `v0.1.1` points to the reviewed source commit |
+| GitHub release assets | **Not published** | Build wheel/zipapp locally from a pinned source checkout |
+| Package index and public plugin listing | **Not published** | Install only from pinned, reviewed source |
 
 See `STATUS.md` for the current handoff truth and exact validation record.
 

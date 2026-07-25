@@ -5,9 +5,10 @@ and its optional mutation is limited to one namespaced trigger on one
 explicitly selected Codex diagnostic database.
 
 Status: implemented, regression-tested with synthetic data, and published as
-GitHub release `v0.1.1`. This safety record does not itself authorize mutation
-of any real Codex database: the database owner must separately review the
-audit, exact plan, backup location, confirmation token, and rollback path.
+source tag `v0.1.1`; binary GitHub release assets are not published. This
+safety record does not itself authorize mutation of any real Codex database:
+the database owner must separately review the audit, exact plan, backup
+location, confirmation token, and rollback path.
 
 ## Non-negotiable invariants
 

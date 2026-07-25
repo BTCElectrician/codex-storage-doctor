@@ -182,6 +182,12 @@ class DistributionTests(unittest.TestCase):
         self.assertIn("v0.1.1", readme)
         self.assertIn("v0.1.1", security)
         self.assertIn("v0.1.1", status)
+        self.assertNotIn("| GitHub release | **Published**", readme)
+        self.assertIn("| GitHub release assets | **Not published**", readme)
+        self.assertIn(
+            "Binary `v0.1.1` GitHub release assets are not published",
+            status,
+        )
         active_paths = (
             root / "README.md",
             root / "SECURITY.md",
