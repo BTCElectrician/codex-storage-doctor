@@ -110,10 +110,13 @@ class PlanningTests(unittest.TestCase):
                     redirected["confirmation_token"],
                     process_scanner=clear_process_scan,
                 )
-            with sqlite3.connect(renamed) as connection:
+            connection = sqlite3.connect(renamed)
+            try:
                 trigger_count = connection.execute(
                     "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger'"
                 ).fetchone()[0]
+            finally:
+                connection.close()
             self.assertEqual(trigger_count, 0)
 
     def test_plan_refuses_non_log_and_incompatible_schema(self) -> None:
@@ -524,10 +527,13 @@ class MitigationTests(unittest.TestCase):
                 )
             self.assertEqual(victim.stat().st_mode & 0o777, original_mode)
             self.assertEqual(tuple(victim.iterdir()), ())
-            with sqlite3.connect(database) as connection:
+            connection = sqlite3.connect(database)
+            try:
                 trigger_count = connection.execute(
                     "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger'"
                 ).fetchone()[0]
+            finally:
+                connection.close()
             self.assertEqual(trigger_count, 1)
 
             missing_backup_path = dict(manifest)
